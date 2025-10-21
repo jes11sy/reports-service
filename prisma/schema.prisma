@@ -1,0 +1,73 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Модели для отчетов
+model Order {
+  id                    Int       @id @default(autoincrement())
+  rk                    String
+  city                  String
+  phone                 String
+  clientName            String
+  statusOrder           String
+  masterId              Int?
+  result                Int?
+  expenditure           Int?
+  clean                 Int?
+  createDate            DateTime  @default(now())
+  closingData           String?
+  directorId            Int?
+  callcentreOperatorId  Int?
+  
+  @@map("order")
+}
+
+model Master {
+  id             Int       @id @default(autoincrement())
+  name           String
+  cities         String[]  @default([])
+  statusWork     String?
+  dateCreate     DateTime  @default(now())
+  
+  @@map("master")
+}
+
+model Director {
+  id             Int       @id @default(autoincrement())
+  name           String
+  dateCreate     DateTime  @default(now())
+  
+  @@map("director")
+}
+
+model Cash {
+  id                Int       @id @default(autoincrement())
+  orderId           Int       @unique
+  amount            Int
+  type              String
+  status            String
+  submittedBy       Int?
+  approvedBy        Int?
+  approvedDate      DateTime?
+  createdAt         DateTime  @default(now())
+  
+  @@map("cash")
+}
+
+model Call {
+  id              Int       @id @default(autoincrement())
+  phoneClient     String
+  direction       String
+  callDate        DateTime
+  duration        Int?
+  status          String
+  operatorId      Int?
+  
+  @@map("call")
+}
+
