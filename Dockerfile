@@ -49,3 +49,6 @@ EXPOSE 5007
 
 CMD ["node", "dist/main"]
 
+
+
+

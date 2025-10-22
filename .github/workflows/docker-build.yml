@@ -34,3 +34,6 @@ jobs:
           cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/reports-service:buildcache
           cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/reports-service:buildcache,mode=max
 
+
+
+
