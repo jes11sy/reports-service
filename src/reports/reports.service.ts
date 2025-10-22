@@ -151,9 +151,9 @@ export class ReportsService {
 
     const where: any = {};
     if (startDate || endDate) {
-      where.callDate = {};
-      if (startDate) where.callDate.gte = new Date(startDate);
-      if (endDate) where.callDate.lte = new Date(endDate);
+      where.dateCreate = {};
+      if (startDate) where.dateCreate.gte = new Date(startDate);
+      if (endDate) where.dateCreate.lte = new Date(endDate);
     }
     if (operatorId) where.operatorId = +operatorId;
 

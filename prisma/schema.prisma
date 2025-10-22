@@ -31,18 +31,37 @@ model Order {
 
 model Master {
   id             Int       @id @default(autoincrement())
-  name           String
   cities         String[]  @default([])
-  statusWork     String?
-  dateCreate     DateTime  @default(now())
+  name           String
+  login          String?   @unique
+  password       String?
+  passportDoc    String?   @map("passport_doc")
+  contractDoc    String?   @map("contract_doc")
+  statusWork     String?   @map("status_work")
+  dateCreate     DateTime  @default(now()) @map("date_create")
+  note           String?
+  tgId           String?   @unique @map("tg_id")
+  chatId         String?   @map("chat_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
   
   @@map("master")
 }
 
 model Director {
   id             Int       @id @default(autoincrement())
+  cities         String[]  @default([])
   name           String
-  dateCreate     DateTime  @default(now())
+  login          String    @unique
+  password       String
+  contractDoc    String?   @map("contract_doc")
+  passportDoc    String?   @map("passport_doc")
+  dateCreate     DateTime  @default(now()) @map("date_create")
+  note           String?
+  tgId           String?   @unique @map("tg_id")
+  chatId         String?   @map("chat_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
   
   @@map("director")
 }
@@ -52,9 +71,16 @@ model CallcentreOperator {
   name           String
   login          String    @unique
   password       String
-  statusWork     String?
-  dateCreate     DateTime  @default(now())
+  city           String
+  status         String
+  statusWork     String    @map("status_work")
+  passport       String?
+  contract       String?
+  dateCreate     DateTime  @map("date_create")
   note           String?
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  sipAddress     String?   @map("sip_address")
   
   @@map("callcentre_operator")
 }
@@ -64,9 +90,11 @@ model CallcentreAdmin {
   name           String
   login          String    @unique
   password       String
-  statusWork     String?
-  dateCreate     DateTime  @default(now())
+  statusWork     String?   @map("status_work")
+  dateCreate     DateTime  @default(now()) @map("date_create")
   note           String?
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
   
   @@map("callcentre_admin")
 }
