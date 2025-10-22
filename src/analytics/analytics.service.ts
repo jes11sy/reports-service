@@ -29,7 +29,6 @@ export class AnalyticsService {
         id: true,
         name: true,
         login: true,
-        city: true,
         statusWork: true,
       },
     });
@@ -40,7 +39,7 @@ export class AnalyticsService {
           operatorId: operator.id,
           ...(startDate || endDate
             ? {
-                dateCreate: {
+                callDate: {
                   ...(startDate && { gte: new Date(startDate) }),
                   ...(endDate && { lte: new Date(endDate) }),
                 },
@@ -90,7 +89,6 @@ export class AnalyticsService {
         return {
           operatorId: operator.id,
           operatorName: operator.name,
-          city: operator.city,
           status: operator.statusWork,
           calls: {
             total: totalCalls,
