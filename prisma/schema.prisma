@@ -86,16 +86,19 @@ model Cash {
 
 model Call {
   id              Int       @id @default(autoincrement())
-  callId          String    @unique
-  phoneClient     String
-  direction       String
-  callDate        DateTime
-  duration        Int?
+  rk              String
+  city            String
+  phoneClient     String    @map("phone_client")
+  phoneAts        String    @map("phone_ats")
+  dateCreate      DateTime  @map("date_create")
+  operatorId      Int       @map("operator_id")
   status          String
-  operatorId      Int?
-  createdAt       DateTime  @default(now())
+  callId          String?   @unique @map("call_id")
+  duration        Int?
+  recordUrl       String?   @map("record_url")
+  createdAt       DateTime  @default(now()) @map("created_at")
   
-  @@map("call")
+  @@map("calls")
 }
 
 

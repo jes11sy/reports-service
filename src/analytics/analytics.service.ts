@@ -39,7 +39,7 @@ export class AnalyticsService {
           operatorId: operator.id,
           ...(startDate || endDate
             ? {
-                callDate: {
+                dateCreate: {
                   ...(startDate && { gte: new Date(startDate) }),
                   ...(endDate && { lte: new Date(endDate) }),
                 },
@@ -436,9 +436,9 @@ export class AnalyticsService {
 
     const callWhere: any = {};
     if (startDate || endDate) {
-      callWhere.callDate = {};
-      if (startDate) callWhere.callDate.gte = new Date(startDate);
-      if (endDate) callWhere.callDate.lte = new Date(endDate);
+      callWhere.dateCreate = {};
+      if (startDate) callWhere.dateCreate.gte = new Date(startDate);
+      if (endDate) callWhere.dateCreate.lte = new Date(endDate);
     }
 
     const [
