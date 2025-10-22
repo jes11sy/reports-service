@@ -80,7 +80,7 @@ export class AnalyticsController {
   @Get('dashboard')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN, UserRole.OPERATOR)
+  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN, UserRole.CALLCENTRE_OPERATOR)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Получить данные для дашборда' })
   @ApiQuery({ name: 'period', required: false, enum: ['today', 'week', 'month'] })

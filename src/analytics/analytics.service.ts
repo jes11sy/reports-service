@@ -142,7 +142,7 @@ export class AnalyticsService {
       cities.map(async ({ city }) => {
         const cityWhere = { ...where, city };
 
-        const [totalOrders, completedOrders, totalRevenue, totalCalls, answeredCalls] =
+        const [totalOrders, completedOrders, totalRevenue] =
           await Promise.all([
             this.prisma.order.count({ where: cityWhere }),
             this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Закрыт' } }),
@@ -150,9 +150,11 @@ export class AnalyticsService {
               where: { ...cityWhere, result: { not: null } },
               _sum: { result: true },
             }),
-            this.prisma.call.count({ where: { city } }),
-            this.prisma.call.count({ where: { city, status: 'answered' } }),
           ]);
+        
+        // Calls don't have city field, so get all calls for time period
+        const totalCalls = await this.prisma.call.count({ where: where });
+        const answeredCalls = await this.prisma.call.count({ where: { ...where, status: 'answered' } });
 
         const conversionRate = answeredCalls > 0 ? (totalOrders / answeredCalls) * 100 : 0;
         const completionRate = totalOrders > 0 ? (completedOrders / totalOrders) * 100 : 0;
@@ -209,7 +211,7 @@ export class AnalyticsService {
       campaigns.map(async ({ rk }) => {
         const rkWhere = { ...where, rk };
 
-        const [totalOrders, completedOrders, totalRevenue, totalCalls, answeredCalls] =
+        const [totalOrders, completedOrders, totalRevenue] =
           await Promise.all([
             this.prisma.order.count({ where: rkWhere }),
             this.prisma.order.count({ where: { ...rkWhere, statusOrder: 'Закрыт' } }),
@@ -217,9 +219,11 @@ export class AnalyticsService {
               where: { ...rkWhere, result: { not: null } },
               _sum: { result: true },
             }),
-            this.prisma.call.count({ where: { rk } }),
-            this.prisma.call.count({ where: { rk, status: 'answered' } }),
           ]);
+        
+        // Calls don't have rk field, so get all calls for time period
+        const totalCalls = await this.prisma.call.count({ where: where });
+        const answeredCalls = await this.prisma.call.count({ where: { ...where, status: 'answered' } });
 
         const conversionRate = answeredCalls > 0 ? (totalOrders / answeredCalls) * 100 : 0;
         const completionRate = totalOrders > 0 ? (completedOrders / totalOrders) * 100 : 0;
@@ -434,9 +438,9 @@ export class AnalyticsService {
 
     const callWhere: any = {};
     if (startDate || endDate) {
-      callWhere.dateCreate = {};
-      if (startDate) callWhere.dateCreate.gte = new Date(startDate);
-      if (endDate) callWhere.dateCreate.lte = new Date(endDate);
+      callWhere.callDate = {};
+      if (startDate) callWhere.callDate.gte = new Date(startDate);
+      if (endDate) callWhere.callDate.lte = new Date(endDate);
     }
 
     const [
@@ -506,7 +510,8 @@ export class AnalyticsService {
     const completionTimes = avgTimeToComplete
       .map((o) => {
         if (o.closingData && o.createDate) {
-          return (o.closingData.getTime() - o.createDate.getTime()) / (1000 * 60 * 60);
+          const closingDate = o.closingData ? new Date(o.closingData) : null;
+          return closingDate ? (closingDate.getTime() - o.createDate.getTime()) / (1000 * 60 * 60) : 0;
         }
         return null;
       })
@@ -521,7 +526,8 @@ export class AnalyticsService {
     const assignTimes = avgTimeToAssignMaster
       .map((o) => {
         if (o.dateMeeting && o.createDate) {
-          return (o.dateMeeting.getTime() - o.createDate.getTime()) / (1000 * 60 * 60);
+          const meetingDate = new Date(o.dateMeeting);
+          return (meetingDate.getTime() - o.createDate.getTime()) / (1000 * 60 * 60);
         }
         return null;
       })

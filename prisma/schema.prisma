@@ -21,8 +21,10 @@ model Order {
   clean                 Int?
   createDate            DateTime  @default(now())
   closingData           String?
+  dateMeeting           String?
   directorId            Int?
   callcentreOperatorId  Int?
+  callcentreAdminId     Int?
   
   @@map("order")
 }
@@ -45,13 +47,36 @@ model Director {
   @@map("director")
 }
 
+model CallcentreOperator {
+  id             Int       @id @default(autoincrement())
+  name           String
+  login          String    @unique
+  password       String
+  statusWork     String?
+  dateCreate     DateTime  @default(now())
+  note           String?
+  
+  @@map("callcentre_operator")
+}
+
+model CallcentreAdmin {
+  id             Int       @id @default(autoincrement())
+  name           String
+  login          String    @unique
+  password       String
+  statusWork     String?
+  dateCreate     DateTime  @default(now())
+  note           String?
+  
+  @@map("callcentre_admin")
+}
+
 model Cash {
   id                Int       @id @default(autoincrement())
   orderId           Int       @unique
   amount            Int
   type              String
   status            String
-  submittedBy       Int?
   approvedBy        Int?
   approvedDate      DateTime?
   createdAt         DateTime  @default(now())
@@ -61,12 +86,14 @@ model Cash {
 
 model Call {
   id              Int       @id @default(autoincrement())
+  callId          String    @unique
   phoneClient     String
   direction       String
   callDate        DateTime
   duration        Int?
   status          String
   operatorId      Int?
+  createdAt       DateTime  @default(now())
   
   @@map("call")
 }
