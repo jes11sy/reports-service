@@ -2,10 +2,10 @@ import { Injectable, CanActivate, ExecutionContext, SetMetadata } from '@nestjs/
 import { Reflector } from '@nestjs/core';
 
 export enum UserRole {
-  MASTER = 'MASTER',
-  DIRECTOR = 'DIRECTOR',
-  CALLCENTRE_ADMIN = 'CALLCENTRE_ADMIN',
-  CALLCENTRE_OPERATOR = 'CALLCENTRE_OPERATOR',
+  MASTER = 'master',
+  DIRECTOR = 'director',
+  CALLCENTRE_ADMIN = 'admin',
+  CALLCENTRE_OPERATOR = 'operator',
 }
 
 export const Roles = (...roles: UserRole[]) => SetMetadata('roles', roles);
