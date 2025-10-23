@@ -532,11 +532,10 @@ export class AnalyticsService {
     const avgAssignTime =
       assignTimes.length > 0 ? assignTimes.reduce((a, b) => a + b, 0) / assignTimes.length : 0;
 
-    const profit = Number(totalRevenue._sum.result || 0) - Number(totalExpenditure._sum.expenditure || 0);
-    const profitMargin =
-      totalRevenue._sum.result > 0
-        ? (profit / Number(totalRevenue._sum.result)) * 100
-        : 0;
+    const revenueTotal = Number(totalRevenue._sum.result || 0);
+    const expenditureTotal = Number(totalExpenditure._sum.expenditure || 0);
+    const profit = revenueTotal - expenditureTotal;
+    const profitMargin = revenueTotal > 0 ? (profit / revenueTotal) * 100 : 0;
 
     return {
       success: true,
@@ -560,8 +559,8 @@ export class AnalyticsService {
           avgAssignTime: Math.round(avgAssignTime * 10) / 10,
         },
         finance: {
-          revenue: Number(totalRevenue._sum.result || 0),
-          expenditure: Number(totalExpenditure._sum.expenditure || 0),
+          revenue: revenueTotal,
+          expenditure: expenditureTotal,
           profit,
           profitMargin: Math.round(profitMargin * 100) / 100,
         },
