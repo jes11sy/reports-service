@@ -55,13 +55,15 @@ export class StatsService {
       },
     });
 
-    const totalCalls = callsStats.reduce((sum, stat) => sum + stat._count.id, 0);
     const acceptedCalls = callsStats
       .filter(stat => stat.status === 'answered')
       .reduce((sum, stat) => sum + stat._count.id, 0);
     const missedCalls = callsStats
       .filter(stat => ['missed', 'no_answer', 'busy'].includes(stat.status))
       .reduce((sum, stat) => sum + stat._count.id, 0);
+    
+    // Всего звонков = принятые + пропущенные
+    const totalCalls = acceptedCalls + missedCalls;
 
     // Средняя длительность звонков
     const avgCallDuration = await this.prisma.call.aggregate({
@@ -82,10 +84,20 @@ export class StatsService {
       _count: { id: true },
     });
 
-    // Статистика по дням
+    // Статистика по дням (только принятые звонки за последние 7 дней)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    
     const dailyStats = await this.prisma.call.groupBy({
       by: ['dateCreate'],
-      where: callWhere,
+      where: {
+        operatorId,
+        status: 'answered',
+        dateCreate: {
+          gte: sevenDaysAgo,
+          lte: end,
+        },
+      },
       _count: { id: true },
       orderBy: { dateCreate: 'asc' },
     });
@@ -95,20 +107,26 @@ export class StatsService {
       calls: stat._count?.id || 0,
     }));
 
-    // Статистика по городам
+    // Статистика по городам (только принятые звонки)
     const cityStats = await this.prisma.call.groupBy({
       by: ['city'],
-      where: callWhere,
+      where: {
+        ...callWhere,
+        status: 'answered',
+      },
       _count: { id: true },
       orderBy: {
         _count: { id: 'desc' },
       },
     });
 
-    // Статистика по РК
+    // Статистика по РК (только принятые звонки)
     const rkStats = await this.prisma.call.groupBy({
       by: ['rk'],
-      where: callWhere,
+      where: {
+        ...callWhere,
+        status: 'answered',
+      },
       _count: { id: true },
       orderBy: {
         _count: { id: 'desc' },
@@ -136,21 +154,18 @@ export class StatsService {
         endDate: end.toISOString(),
       },
       calls: {
-        total: totalCalls,
-        accepted: acceptedCalls,
-        missed: missedCalls,
+        total: totalCalls,  // принятые + пропущенные
+        accepted: acceptedCalls,  // принятые
+        missed: missedCalls,  // пропущенные
         acceptanceRate: totalCalls > 0 ? Math.round((acceptedCalls / totalCalls) * 100) : 0,
         avgDuration: Math.round(avgCallDuration._avg.duration || 0),
       },
       orders: {
-        total: ordersStats._count.id,
-        completed: completedOrders,
+        total: ordersStats._count.id,  // созданные заказы данным оператором
         byStatus: ordersByStatus.reduce((acc, item) => {
           acc[item.statusOrder] = item._count.id;
           return acc;
         }, {} as Record<string, number>),
-        totalRevenue: revenueSum,
-        avgRevenue: completedOrders > 0 ? Math.round(revenueSum / completedOrders) : 0,
       },
       dailyStats: dailyStatsFormatted,
       cityStats: cityStats.map(stat => ({
