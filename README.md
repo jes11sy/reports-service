@@ -21,6 +21,11 @@
 
 ## API Endpoints
 
+### Stats (Статистика для операторов)
+- `GET /api/v1/stats/my` - личная статистика оператора
+- `GET /api/v1/stats/operator/:operatorId` - статистика конкретного оператора (админ)
+- `GET /api/v1/stats/overall` - общая статистика (админ)
+
 ### Reports
 - `GET /api/v1/reports/orders` - статистика заказов
 - `GET /api/v1/reports/masters` - отчеты мастеров
