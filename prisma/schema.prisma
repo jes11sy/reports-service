@@ -9,58 +9,86 @@ datasource db {
 
 // Модели для отчетов
 model Order {
-  id                    Int       @id @default(autoincrement())
-  rk                    String
-  city                  String
-  phone                 String
-  clientName            String
-  statusOrder           String
-  masterId              Int?
-  result                Int?
-  expenditure           Int?
-  clean                 Int?
-  createDate            DateTime  @default(now())
-  closingData           String?
-  dateMeeting           String?
-  directorId            Int?
-  callcentreOperatorId  Int?
-  callcentreAdminId     Int?
+  id             Int       @id @default(autoincrement())
+  rk             String
+  city           String
+  avitoName      String?   @map("avito_name")
+  phone          String
+  typeOrder      String    @map("type_order")
+  clientName     String    @map("client_name")
+  address        String
+  dateMeeting    DateTime  @map("date_meeting")
+  typeEquipment  String    @map("type_equipment")
+  problem        String
+  callRecord     String?   @map("call_record")
+  statusOrder    String    @map("status_order")
+  masterId       Int?      @map("master_id")
+  result         Decimal?  @db.Decimal(10, 2)
+  expenditure    Decimal?  @db.Decimal(10, 2)
+  clean          Decimal?  @db.Decimal(10, 2)
+  masterChange   Decimal?  @map("master_change") @db.Decimal(10, 2)
+  bsoDoc         String?   @map("bso_doc")
+  expenditureDoc String?   @map("expenditure_doc")
+  operatorNameId Int       @map("operator_name_id")
+  createDate     DateTime  @map("create_date")
+  closingData    DateTime? @map("closing_data")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  avitoChatId    String?   @map("avito_chatid")
+  callId         String?   @map("call_id")
+  prepayment     Decimal?  @db.Decimal(10, 2)
+  dateClosmod    DateTime? @map("date_closmod")
+  comment        String?
+  cashSubmissionStatus String?      @default("Готово") @map("cash_submission_status")
+  cashSubmissionDate   DateTime?    @map("cash_submission_date")
+  cashSubmissionAmount Decimal?     @map("cash_submission_amount") @db.Decimal(10, 2)
+  cashReceiptDoc       String?      @map("cash_receipt_doc")
+  cashApprovedBy       Int?         @map("cash_approved_by")
+  cashApprovedDate     DateTime?    @map("cash_approved_date")
   
-  @@map("order")
+  @@index([statusOrder, city])
+  @@index([closingData])
+  @@index([masterId, city, closingData])
+  @@index([phone])
+  @@index([createDate, city])
+  @@index([operatorNameId])
+  @@index([createDate])
+  @@index([avitoName])
+  @@map("orders")
 }
 
 model Master {
-  id          Int      @id @default(autoincrement())
-  cities      String[]
-  name        String
-  login       String?  @unique
-  password    String?
-  passportDoc String?  @map("passport_doc")
-  contractDoc String?  @map("contract_doc")
-  statusWork  String   @map("status_work")
-  dateCreate  DateTime @default(now()) @map("date_create")
-  note        String?
-  tgId        String?  @map("tg_id")
-  chatId      String?  @map("chat_id")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  
+  id           Int      @id @default(autoincrement())
+  cities       String[]
+  name         String
+  login        String?  @unique
+  password     String?
+  passportDoc  String?  @map("passport_doc")
+  contractDoc  String?  @map("contract_doc")
+  statusWork   String   @map("status_work")
+  dateCreate   DateTime @default(now()) @map("date_create")
+  note         String?
+  tgId         String?  @map("tg_id")
+  chatId       String?  @map("chat_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
   @@map("master")
 }
 
 model Director {
-  id          Int      @id @default(autoincrement())
-  cities      String[]
-  name        String
-  login       String   @unique
-  password    String
-  contractDoc String?  @map("contract_doc")
-  passportDoc String?  @map("passport_doc")
-  dateCreate  DateTime @default(now()) @map("date_create")
-  note        String?
-  tgId        String?  @map("tg_id")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id           Int      @id @default(autoincrement())
+  cities       String[]
+  name         String
+  login        String   @unique
+  password     String
+  contractDoc  String?  @map("contract_doc")
+  passportDoc  String?  @map("passport_doc")
+  dateCreate   DateTime @default(now()) @map("date_create")
+  note         String?
+  tgId         String?  @map("tg_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
   
   @@map("director")
 }
@@ -85,46 +113,63 @@ model CallcentreOperator {
 }
 
 model CallcentreAdmin {
-  id             Int       @id @default(autoincrement())
-  name           String
-  login          String    @unique
-  password       String
-  statusWork     String?   @map("status_work")
-  dateCreate     DateTime  @default(now()) @map("date_create")
-  note           String?
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt @map("updated_at")
-  
+  id        Int      @id @default(autoincrement())
+  login     String   @unique
+  password  String
+  note      String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
   @@map("callcentre_admin")
 }
 
 model Cash {
-  id                Int       @id @default(autoincrement())
-  orderId           Int       @unique
-  amount            Int
-  type              String
-  status            String
-  approvedBy        Int?
-  approvedDate      DateTime?
-  createdAt         DateTime  @default(now())
-  
+  id             Int      @id @default(autoincrement())
+  name           String
+  amount         Decimal  @db.Decimal(10, 2)
+  city           String?  @default("Москва")
+  note           String?
+  receiptDoc     String?  @map("receipt_doc")
+  paymentPurpose String?  @map("payment_purpose")
+  dateCreate     DateTime @default(now()) @map("date_create")
+  nameCreate     String   @map("name_create")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([name, city])
+  @@index([dateCreate])
+  @@index([city])
+  @@index([nameCreate])
   @@map("cash")
 }
 
 model Call {
-  id              Int       @id @default(autoincrement())
-  rk              String
-  city            String
-  phoneClient     String    @map("phone_client")
-  phoneAts        String    @map("phone_ats")
-  dateCreate      DateTime  @map("date_create")
-  operatorId      Int       @map("operator_id")
-  status          String
-  callId          String?   @unique @map("call_id")
-  duration        Int?
-  recordUrl       String?   @map("record_url")
-  createdAt       DateTime  @default(now()) @map("created_at")
+  id                   Int       @id @default(autoincrement())
+  rk                   String
+  city                 String
+  avitoName            String?   @map("avito_name")
+  phoneClient          String    @map("phone_client")
+  phoneAts             String    @map("phone_ats")
+  dateCreate           DateTime  @map("date_create")
+  operatorId           Int       @map("operator_id")
+  status               String
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+  recordingEmailSent   Boolean   @default(false) @map("recording_email_sent")
+  recordingPath        String?   @map("recording_path")
+  recordingProcessedAt DateTime? @map("recording_processed_at")
+  // Поля от Mango Office
+  callId               String?   @unique @map("call_id")
+  duration             Int?
+  recordUrl            String?   @map("record_url")
   
+  @@index([city])
+  @@index([dateCreate])
+  @@index([operatorId])
+  @@index([phoneClient])
+  @@index([phoneAts])
+  @@index([avitoName])
+  @@index([callId])
   @@map("calls")
 }
 

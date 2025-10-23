@@ -39,7 +39,7 @@ export class StatsService {
     };
 
     const orderWhere = {
-      callcentreOperatorId: operatorId,
+      operatorNameId: operatorId,
       createDate: {
         gte: start,
         lte: end,
@@ -122,6 +122,7 @@ export class StatsService {
     });
 
     const completedOrders = ordersByStatus.find(s => s.statusOrder === 'Закрыт')?._count.id || 0;
+    const revenueSum = totalRevenue._sum.result ? Number(totalRevenue._sum.result) : 0;
 
     const response = {
       operator: {
@@ -148,8 +149,8 @@ export class StatsService {
           acc[item.statusOrder] = item._count.id;
           return acc;
         }, {} as Record<string, number>),
-        totalRevenue: Number(totalRevenue._sum.result || 0),
-        avgRevenue: completedOrders > 0 ? Math.round(Number(totalRevenue._sum.result || 0) / completedOrders) : 0,
+        totalRevenue: revenueSum,
+        avgRevenue: completedOrders > 0 ? Math.round(revenueSum / completedOrders) : 0,
       },
       dailyStats: dailyStatsFormatted,
       cityStats: cityStats.map(stat => ({
