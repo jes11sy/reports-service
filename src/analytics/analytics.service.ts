@@ -225,10 +225,8 @@ export class AnalyticsService {
 
         const conversionRate = answeredCalls > 0 ? (totalOrders / answeredCalls) * 100 : 0;
         const completionRate = totalOrders > 0 ? (completedOrders / totalOrders) * 100 : 0;
-        const roi =
-          totalRevenue._sum.result && totalOrders > 0
-            ? Number(totalRevenue._sum.result) / totalOrders
-            : 0;
+        const revenueTotal = totalRevenue._sum.result ? Number(totalRevenue._sum.result) : 0;
+        const roi = revenueTotal > 0 && totalOrders > 0 ? revenueTotal / totalOrders : 0;
 
         return {
           campaign: rk,

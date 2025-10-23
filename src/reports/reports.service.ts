@@ -35,6 +35,8 @@ export class ReportsService {
       }),
     ]);
 
+    const revenueSum = totalRevenue._sum.result ? Number(totalRevenue._sum.result) : 0;
+
     return {
       success: true,
       data: {
@@ -42,8 +44,8 @@ export class ReportsService {
         stats: {
           totalCount,
           completedCount,
-          totalRevenue: totalRevenue._sum.result || 0,
-          avgRevenue: completedCount > 0 ? Math.round((totalRevenue._sum.result || 0) / completedCount) : 0,
+          totalRevenue: revenueSum,
+          avgRevenue: completedCount > 0 ? Math.round(revenueSum / completedCount) : 0,
         },
       },
     };
@@ -79,14 +81,17 @@ export class ReportsService {
           }),
         ]);
 
+        const revSum = totalRevenue._sum.result ? Number(totalRevenue._sum.result) : 0;
+        const expSum = totalExpenditure._sum.expenditure ? Number(totalExpenditure._sum.expenditure) : 0;
+
         return {
           masterId: master.id,
           masterName: master.name,
           totalOrders,
           completedOrders,
-          totalRevenue: totalRevenue._sum.result || 0,
-          totalExpenditure: totalExpenditure._sum.expenditure || 0,
-          profit: (totalRevenue._sum.result || 0) - (totalExpenditure._sum.expenditure || 0),
+          totalRevenue: revSum,
+          totalExpenditure: expSum,
+          profit: revSum - expSum,
         };
       })
     );
@@ -107,41 +112,41 @@ export class ReportsService {
       if (endDate) where.createdAt.lte = new Date(endDate);
     }
 
-    const [cashTransactions, approvedSum, pendingSum] = await Promise.all([
+    const [cashTransactions, totalSum] = await Promise.all([
       this.prisma.cash.findMany({
         where,
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.cash.aggregate({
-        where: { ...where, status: 'approved' },
-        _sum: { amount: true },
-      }),
-      this.prisma.cash.aggregate({
-        where: { ...where, status: 'pending' },
+        where,
         _sum: { amount: true },
       }),
     ]);
 
-    // Группировка по типам
-    const byType = {
+    // Группировка по name ("приход" или "расход")
+    const byName = {
+      приход: 0,
       расход: 0,
-      предоплата: 0,
-      чистый: 0,
     };
 
     cashTransactions.forEach(t => {
-      if (t.status === 'approved' && t.type in byType) {
-        byType[t.type] += t.amount;
+      const amount = Number(t.amount);
+      if (t.name === 'приход') {
+        byName.приход += amount;
+      } else if (t.name === 'расход') {
+        byName.расход += amount;
       }
     });
 
     return {
       success: true,
       data: {
-        totalApproved: approvedSum._sum.amount || 0,
-        totalPending: pendingSum._sum.amount || 0,
-        byType,
-        transactions: cashTransactions,
+        total: totalSum._sum.amount ? Number(totalSum._sum.amount) : 0,
+        byName,
+        transactions: cashTransactions.map(t => ({
+          ...t,
+          amount: Number(t.amount),
+        })),
       },
     };
   }
