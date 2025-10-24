@@ -87,6 +87,7 @@ export class ReportsService {
         return {
           masterId: master.id,
           masterName: master.name,
+          city: master.cities?.[0] || 'Не указан', // Берем первый город из массива
           totalOrders,
           completedOrders,
           totalRevenue: revSum,
@@ -213,15 +214,72 @@ export class ReportsService {
   }
 
   async getCityReport(query: any) {
-    // Простая реализация - возвращаем список городов
+    const { startDate, endDate, city } = query;
+
+    const orderWhere: any = {};
+    if (startDate || endDate) {
+      orderWhere.createDate = {};
+      if (startDate) orderWhere.createDate.gte = new Date(startDate);
+      if (endDate) orderWhere.createDate.lte = new Date(endDate);
+    }
+    if (city) orderWhere.city = city;
+
+    // Получаем уникальные города
     const cities = await this.prisma.order.findMany({
       select: { city: true },
       distinct: ['city'],
+      where: orderWhere,
     });
+
+    // Для каждого города считаем статистику
+    const cityStats = await Promise.all(
+      cities.map(async (cityData) => {
+        const cityWhere = { ...orderWhere, city: cityData.city };
+        
+        const [closedOrders, refusals, notOrders, totalClean, totalMasterChange, avgCheck] = await Promise.all([
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Закрыт' } }),
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Отказ' } }),
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Незаказ' } }),
+          this.prisma.order.aggregate({
+            where: { ...cityWhere, statusOrder: 'Закрыт', clean: { not: null } },
+            _sum: { clean: true },
+          }),
+          this.prisma.order.aggregate({
+            where: { ...cityWhere, statusOrder: 'Закрыт', masterChange: { not: null } },
+            _sum: { masterChange: true },
+          }),
+          this.prisma.order.aggregate({
+            where: { ...cityWhere, statusOrder: 'Закрыт', clean: { not: null } },
+            _avg: { clean: true },
+          }),
+        ]);
+
+        // Получаем данные по кассе для города
+        const cashData = await this.prisma.cash.aggregate({
+          where: { city: cityData.city },
+          _sum: { amount: true },
+        });
+
+        return {
+          city: cityData.city,
+          orders: {
+            closedOrders,
+            refusals,
+            notOrders,
+            totalClean: totalClean._sum.clean ? Number(totalClean._sum.clean) : 0,
+            totalMasterChange: totalMasterChange._sum.masterChange ? Number(totalMasterChange._sum.masterChange) : 0,
+            avgCheck: avgCheck._avg.clean ? Number(avgCheck._avg.clean) : 0,
+          },
+          cash: {
+            totalAmount: cashData._sum.amount ? Number(cashData._sum.amount) : 0,
+          },
+        };
+      })
+    );
 
     return {
       success: true,
-      data: cities.map(c => ({ city: c.city })),
+      data: cityStats,
     };
   }
 
