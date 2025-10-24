@@ -211,6 +211,48 @@ export class ReportsService {
     const buffer = await workbook.xlsx.writeBuffer();
     return buffer;
   }
+
+  async getCityReport(query: any) {
+    // Простая реализация - возвращаем список городов
+    const cities = await this.prisma.order.findMany({
+      select: { city: true },
+      distinct: ['city'],
+    });
+
+    return {
+      success: true,
+      data: cities.map(c => ({ city: c.city })),
+    };
+  }
+
+  async getCityDetailedReport(city: string, query: any) {
+    const { startDate, endDate } = query;
+    
+    const where: any = { city };
+    
+    if (startDate) {
+      where.createDate = { ...where.createDate, gte: new Date(startDate) };
+    }
+    
+    if (endDate) {
+      where.createDate = { ...where.createDate, lte: new Date(endDate) };
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where,
+      include: {
+        master: {
+          select: { name: true }
+        }
+      },
+      orderBy: { createDate: 'desc' }
+    });
+
+    return {
+      success: true,
+      data: orders,
+    };
+  }
 }
 
 
