@@ -46,6 +46,8 @@ model Order {
   cashApprovedBy       Int?         @map("cash_approved_by")
   cashApprovedDate     DateTime?    @map("cash_approved_date")
   
+  master               Master?     @relation(fields: [masterId], references: [id])
+  
   @@index([statusOrder, city])
   @@index([closingData])
   @@index([masterId, city, closingData])
@@ -72,6 +74,8 @@ model Master {
   chatId       String?  @map("chat_id")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
+
+  orders       Order[]
 
   @@map("master")
 }
