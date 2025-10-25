@@ -287,10 +287,22 @@ export class ReportsService {
 
         // Получаем данные по кассе для города (без фильтрации по дате)
         const cashWhere: any = { city: cityData.city };
-        const cashData = await this.prisma.cash.aggregate({
-          where: cashWhere,
-          _sum: { amount: true },
-        });
+        
+        // Считаем приходы и расходы отдельно
+        const [incomeData, expenseData] = await Promise.all([
+          this.prisma.cash.aggregate({
+            where: { ...cashWhere, name: 'приход' },
+            _sum: { amount: true },
+          }),
+          this.prisma.cash.aggregate({
+            where: { ...cashWhere, name: 'расход' },
+            _sum: { amount: true },
+          }),
+        ]);
+        
+        const income = incomeData._sum.amount ? Number(incomeData._sum.amount) : 0;
+        const expense = expenseData._sum.amount ? Number(expenseData._sum.amount) : 0;
+        const totalAmount = income - expense;
 
         // Правильный расчет среднего чека: сумма чистыми / количество закрытых заказов
         const totalCleanAmount = totalClean._sum.clean ? Number(totalClean._sum.clean) : 0;
@@ -307,7 +319,7 @@ export class ReportsService {
             avgCheck: correctAvgCheck,
           },
           cash: {
-            totalAmount: cashData._sum.amount ? Number(cashData._sum.amount) : 0,
+            totalAmount: totalAmount,
           },
         };
       })
