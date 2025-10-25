@@ -17,6 +17,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       userId: payload.id || payload.sub,  // старый backend использует 'id', новые микросервисы 'sub'
       login: payload.login,
       role: payload.role,
+      cities: payload.cities,  // Добавляем cities из JWT токена
     };
   }
 }

@@ -62,6 +62,7 @@ export class ReportsController {
   @Roles(UserRole.DIRECTOR)
   @ApiOperation({ summary: 'Get city report' })
   async getCityReport(@Query() query: any, @Request() req: any) {
+    console.log('Controller - req.user:', req.user);
     return this.reportsService.getCityReport(query, req.user);
   }
 
