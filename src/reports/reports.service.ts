@@ -214,7 +214,9 @@ export class ReportsService {
   }
 
   async getCityReport(query: any, user?: any) {
+    console.log('=== getCityReport START ===');
     console.log('getCityReport called with user:', user);
+    console.log('getCityReport called with query:', query);
     const { startDate, endDate, city } = query;
 
     const orderWhere: any = {};
@@ -224,10 +226,7 @@ export class ReportsService {
       if (endDate) orderWhere.createDate.lte = new Date(endDate);
     }
     
-    // Фильтрация по городам директора - точное совпадение
-    if (user?.role === 'director' && user?.cities) {
-      orderWhere.city = { in: user.cities };
-    }
+    // Фильтрация по городам директора НЕ применяем здесь - будем фильтровать в цикле
     
     // Если указан конкретный город, он должен быть в списке городов директора
     if (city) {
@@ -258,6 +257,11 @@ export class ReportsService {
     const cityStats = await Promise.all(
       cities.map(async (cityData) => {
         const cityWhere = { ...orderWhere, city: cityData.city };
+        
+        // Для директора дополнительно проверяем, что город в его списке
+        if (user?.role === 'director' && user?.cities && !user.cities.includes(cityData.city)) {
+          return null; // Пропускаем город, которого нет у директора
+        }
         
         const [closedOrders, refusals, notOrders, totalClean, totalMasterChange, avgCheck] = await Promise.all([
           // Закрытых заказов = Готово + Отказ
@@ -311,7 +315,7 @@ export class ReportsService {
 
     return {
       success: true,
-      data: cityStats,
+      data: cityStats.filter(stat => stat !== null),
     };
   }
 
