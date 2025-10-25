@@ -213,7 +213,7 @@ export class ReportsService {
     return buffer;
   }
 
-  async getCityReport(query: any) {
+  async getCityReport(query: any, user?: any) {
     const { startDate, endDate, city } = query;
 
     const orderWhere: any = {};
@@ -222,7 +222,20 @@ export class ReportsService {
       if (startDate) orderWhere.createDate.gte = new Date(startDate);
       if (endDate) orderWhere.createDate.lte = new Date(endDate);
     }
-    if (city) orderWhere.city = city;
+    
+    // Фильтрация по городам директора
+    if (user?.role === 'director' && user?.cities) {
+      orderWhere.city = { in: user.cities };
+    }
+    
+    // Если указан конкретный город, он должен быть в списке городов директора
+    if (city) {
+      if (user?.role === 'director' && user?.cities && !user.cities.includes(city)) {
+        // Если директор пытается посмотреть город, которого нет в его списке
+        return { success: true, data: [] };
+      }
+      orderWhere.city = city;
+    }
 
     // Получаем уникальные города
     const cities = await this.prisma.order.findMany({
@@ -237,28 +250,37 @@ export class ReportsService {
         const cityWhere = { ...orderWhere, city: cityData.city };
         
         const [closedOrders, refusals, notOrders, totalClean, totalMasterChange, avgCheck] = await Promise.all([
-          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Закрыт' } }),
+          // Закрытых заказов = Готово + Отказ
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: { in: ['Готово', 'Отказ'] } } }),
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Отказ' } }),
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Незаказ' } }),
+          // Сумма чистыми только по статусу "Готово"
           this.prisma.order.aggregate({
-            where: { ...cityWhere, statusOrder: 'Закрыт', clean: { not: null } },
+            where: { ...cityWhere, statusOrder: 'Готово', clean: { not: null } },
             _sum: { clean: true },
           }),
+          // Сумма сдача мастера только по статусу "Готово"
           this.prisma.order.aggregate({
-            where: { ...cityWhere, statusOrder: 'Закрыт', masterChange: { not: null } },
+            where: { ...cityWhere, statusOrder: 'Готово', masterChange: { not: null } },
             _sum: { masterChange: true },
           }),
+          // Средний чек = сумма чистыми / количество закрытых заказов (Готово + Отказ)
           this.prisma.order.aggregate({
-            where: { ...cityWhere, statusOrder: 'Закрыт', clean: { not: null } },
+            where: { ...cityWhere, statusOrder: 'Готово', clean: { not: null } },
             _avg: { clean: true },
           }),
         ]);
 
-        // Получаем данные по кассе для города
+        // Получаем данные по кассе для города (без фильтрации по дате)
+        const cashWhere: any = { city: cityData.city };
         const cashData = await this.prisma.cash.aggregate({
-          where: { city: cityData.city },
+          where: cashWhere,
           _sum: { amount: true },
         });
+
+        // Правильный расчет среднего чека: сумма чистыми / количество закрытых заказов
+        const totalCleanAmount = totalClean._sum.clean ? Number(totalClean._sum.clean) : 0;
+        const correctAvgCheck = closedOrders > 0 ? totalCleanAmount / closedOrders : 0;
 
         return {
           city: cityData.city,
@@ -266,9 +288,9 @@ export class ReportsService {
             closedOrders,
             refusals,
             notOrders,
-            totalClean: totalClean._sum.clean ? Number(totalClean._sum.clean) : 0,
+            totalClean: totalCleanAmount,
             totalMasterChange: totalMasterChange._sum.masterChange ? Number(totalMasterChange._sum.masterChange) : 0,
-            avgCheck: avgCheck._avg.clean ? Number(avgCheck._avg.clean) : 0,
+            avgCheck: correctAvgCheck,
           },
           cash: {
             totalAmount: cashData._sum.amount ? Number(cashData._sum.amount) : 0,

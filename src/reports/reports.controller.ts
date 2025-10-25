@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards, HttpCode, HttpStatus, Response, Param } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, HttpCode, HttpStatus, Response, Param, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { ReportsService } from './reports.service';
@@ -61,8 +61,8 @@ export class ReportsController {
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR)
   @ApiOperation({ summary: 'Get city report' })
-  async getCityReport(@Query() query: any) {
-    return this.reportsService.getCityReport(query);
+  async getCityReport(@Query() query: any, @Request() req: any) {
+    return this.reportsService.getCityReport(query, req.user);
   }
 
   @Get('city/:city')
