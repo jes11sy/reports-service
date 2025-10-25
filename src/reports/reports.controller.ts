@@ -34,8 +34,8 @@ export class ReportsController {
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR)
   @ApiOperation({ summary: 'Get masters report' })
-  async getMastersReport(@Query() query: any) {
-    return this.reportsService.getMastersReport(query);
+  async getMastersReport(@Query() query: any, @Request() req: any) {
+    return this.reportsService.getMastersReport(query, req.user);
   }
 
   @Get('finance')

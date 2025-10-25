@@ -51,51 +51,77 @@ export class ReportsService {
     };
   }
 
-  async getMastersReport(query: any) {
+  async getMastersReport(query: any, user?: any) {
     const { startDate, endDate, masterId } = query;
 
     const orderWhere: any = {};
     if (startDate || endDate) {
-      orderWhere.createDate = {};
-      if (startDate) orderWhere.createDate.gte = new Date(startDate);
-      if (endDate) orderWhere.createDate.lte = new Date(endDate);
+      orderWhere.closingData = {};
+      if (startDate) orderWhere.closingData.gte = new Date(startDate);
+      if (endDate) orderWhere.closingData.lte = new Date(endDate);
     }
     if (masterId) orderWhere.masterId = +masterId;
 
-    const masters = await this.prisma.master.findMany({
-      where: masterId ? { id: +masterId } : {},
-    });
+    // Фильтрация по городам директора
+    let masters;
+    if (user?.role === 'director' && user?.cities) {
+      // Для директора показываем только мастеров его городов
+      masters = await this.prisma.master.findMany({
+        where: {
+          cities: { hasSome: user.cities }
+        }
+      });
+    } else {
+      masters = await this.prisma.master.findMany({
+        where: masterId ? { id: +masterId } : {},
+      });
+    }
 
-    const masterStats = await Promise.all(
-      masters.map(async (master) => {
+    // Для каждого мастера создаем записи по каждому его городу
+    const masterStats = [];
+    
+    for (const master of masters) {
+      for (const city of master.cities) {
+        // Проверяем, что город входит в список городов директора
+        if (user?.role === 'director' && user?.cities && !user.cities.includes(city)) {
+          continue;
+        }
+        
+        const cityWhere = { ...orderWhere, masterId: master.id, city };
+        
         const [totalOrders, completedOrders, totalRevenue, totalExpenditure] = await Promise.all([
-          this.prisma.order.count({ where: { ...orderWhere, masterId: master.id } }),
-          this.prisma.order.count({ where: { ...orderWhere, masterId: master.id, statusOrder: 'Закрыт' } }),
+          // Всего заказов = Готово + Отказ
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: { in: ['Готово', 'Отказ'] } } }),
+          // Заказы со статусом Готово
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово' } }),
+          // Сумма чистыми только по статусу Готово
           this.prisma.order.aggregate({
-            where: { ...orderWhere, masterId: master.id, result: { not: null } },
-            _sum: { result: true },
+            where: { ...cityWhere, statusOrder: 'Готово', clean: { not: null } },
+            _sum: { clean: true },
           }),
+          // Сумма сдача мастера только по статусу Готово
           this.prisma.order.aggregate({
-            where: { ...orderWhere, masterId: master.id, expenditure: { not: null } },
-            _sum: { expenditure: true },
+            where: { ...cityWhere, statusOrder: 'Готово', masterChange: { not: null } },
+            _sum: { masterChange: true },
           }),
         ]);
 
-        const revSum = totalRevenue._sum.result ? Number(totalRevenue._sum.result) : 0;
-        const expSum = totalExpenditure._sum.expenditure ? Number(totalExpenditure._sum.expenditure) : 0;
+        const revSum = totalRevenue._sum.clean ? Number(totalRevenue._sum.clean) : 0;
+        const expSum = totalExpenditure._sum.masterChange ? Number(totalExpenditure._sum.masterChange) : 0;
+        // Средний чек = сумма чистыми / (Готово + Отказ)
+        const avgCheck = totalOrders > 0 ? revSum / totalOrders : 0;
 
-        return {
+        masterStats.push({
           masterId: master.id,
           masterName: master.name,
-          city: master.cities?.[0] || 'Не указан', // Берем первый город из массива
-          totalOrders,
-          completedOrders,
-          totalRevenue: revSum,
-          totalExpenditure: expSum,
-          profit: revSum - expSum,
-        };
-      })
-    );
+          city,
+          totalOrders, // Готово + Отказ
+          turnover: revSum, // Сумма чистыми (только Готово)
+          avgCheck, // Сумма чистыми / (Готово + Отказ)
+          salary: expSum, // Сумма сдача мастера (только Готово)
+        });
+      }
+    }
 
     return {
       success: true,
