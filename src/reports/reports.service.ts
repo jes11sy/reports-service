@@ -214,6 +214,7 @@ export class ReportsService {
   }
 
   async getCityReport(query: any, user?: any) {
+    console.log('getCityReport called with user:', user);
     const { startDate, endDate, city } = query;
 
     const orderWhere: any = {};
@@ -223,7 +224,7 @@ export class ReportsService {
       if (endDate) orderWhere.createDate.lte = new Date(endDate);
     }
     
-    // Фильтрация по городам директора
+    // Фильтрация по городам директора - точное совпадение
     if (user?.role === 'director' && user?.cities) {
       orderWhere.city = { in: user.cities };
     }
@@ -240,8 +241,10 @@ export class ReportsService {
     // Получаем уникальные города
     let cities;
     if (user?.role === 'director' && user?.cities) {
-      // Для директора показываем только его города
+      // Для директора показываем только его города (точное совпадение)
+      console.log('Director cities:', user.cities);
       cities = user.cities.map(cityName => ({ city: cityName }));
+      console.log('Filtered cities for director:', cities);
     } else {
       // Для других ролей получаем все города из базы
       cities = await this.prisma.order.findMany({
