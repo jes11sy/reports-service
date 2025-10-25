@@ -238,11 +238,18 @@ export class ReportsService {
     }
 
     // Получаем уникальные города
-    const cities = await this.prisma.order.findMany({
-      select: { city: true },
-      distinct: ['city'],
-      where: orderWhere,
-    });
+    let cities;
+    if (user?.role === 'director' && user?.cities) {
+      // Для директора показываем только его города
+      cities = user.cities.map(cityName => ({ city: cityName }));
+    } else {
+      // Для других ролей получаем все города из базы
+      cities = await this.prisma.order.findMany({
+        select: { city: true },
+        distinct: ['city'],
+        where: orderWhere,
+      });
+    }
 
     // Для каждого города считаем статистику
     const cityStats = await Promise.all(
