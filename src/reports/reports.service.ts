@@ -221,9 +221,9 @@ export class ReportsService {
 
     const orderWhere: any = {};
     if (startDate || endDate) {
-      orderWhere.createDate = {};
-      if (startDate) orderWhere.createDate.gte = new Date(startDate);
-      if (endDate) orderWhere.createDate.lte = new Date(endDate);
+      orderWhere.closingData = {};
+      if (startDate) orderWhere.closingData.gte = new Date(startDate);
+      if (endDate) orderWhere.closingData.lte = new Date(endDate);
     }
     
     // Фильтрация по городам директора НЕ применяем здесь - будем фильтровать в цикле
