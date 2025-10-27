@@ -385,6 +385,83 @@ export class ReportsService {
       data: orders,
     };
   }
+
+  async getMasterStatistics(query: any, user?: any) {
+    const { startDate, endDate } = query;
+
+    // Получаем ID мастера из JWT токена
+    const masterId = user?.userId;
+    
+    if (!masterId) {
+      throw new Error('Master ID not found in token');
+    }
+
+    // Получаем данные мастера
+    const master = await this.prisma.master.findUnique({
+      where: { id: masterId },
+      select: { id: true, name: true, cities: true },
+    });
+
+    if (!master) {
+      throw new Error('Master not found');
+    }
+
+    const where: any = {
+      masterId,
+    };
+
+    // Фильтр по датам
+    if (startDate || endDate) {
+      where.closingData = {};
+      if (startDate) where.closingData.gte = new Date(startDate);
+      if (endDate) where.closingData.lte = new Date(endDate);
+    }
+
+    // Получаем уникальные города мастера
+    const cities = master.cities || [];
+
+    // Для каждого города считаем статистику
+    const cityStats = await Promise.all(
+      cities.map(async (city) => {
+        const cityWhere = { ...where, city };
+
+        const [closedOrders, modernOrders, totalClean, totalMasterChange] = await Promise.all([
+          // Закрытые заказы = Готово
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово' } }),
+          // Модерны
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Модерн' } }),
+          // Сумма чистыми только по статусу "Готово"
+          this.prisma.order.aggregate({
+            where: { ...cityWhere, statusOrder: 'Готово', clean: { not: null } },
+            _sum: { clean: true },
+          }),
+          // Сумма сдача мастера только по статусу "Готово"
+          this.prisma.order.aggregate({
+            where: { ...cityWhere, statusOrder: 'Готово', masterChange: { not: null } },
+            _sum: { masterChange: true },
+          }),
+        ]);
+
+        const cleanAmount = totalClean._sum.clean ? Number(totalClean._sum.clean) : 0;
+        const masterChangeAmount = totalMasterChange._sum.masterChange ? Number(totalMasterChange._sum.masterChange) : 0;
+        const avgCheck = closedOrders > 0 ? cleanAmount / closedOrders : 0;
+
+        return {
+          city,
+          closedOrders,
+          modernOrders,
+          totalRevenue: cleanAmount,
+          averageCheck: avgCheck,
+          salary: masterChangeAmount,
+        };
+      })
+    );
+
+    return {
+      success: true,
+      data: cityStats,
+    };
+  }
 }
 
 
