@@ -87,6 +87,15 @@ export class ReportsController {
     res.header('Content-Disposition', `attachment; filename=report-${Date.now()}.xlsx`);
     res.send(buffer);
   }
+
+  @Get('statistics/master')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @ApiBearerAuth()
+  @Roles(UserRole.MASTER)
+  @ApiOperation({ summary: 'Get master statistics by cities' })
+  async getMasterStatistics(@Query() query: any, @Request() req: any) {
+    return this.reportsService.getMasterStatistics(query, req.user);
+  }
 }
 
 
