@@ -91,7 +91,7 @@ export class ReportsController {
   @Get('statistics/master')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.master)
+  @Roles(UserRole.MASTER)
   @ApiOperation({ summary: 'Get master statistics by cities' })
   async getMasterStatistics(@Query() query: any, @Request() req: any) {
     return this.reportsService.getMasterStatistics(query, req.user);
