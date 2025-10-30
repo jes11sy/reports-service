@@ -1,4 +1,4 @@
-import { Injectable, CanActivate, ExecutionContext, SetMetadata } from '@nestjs/common';
+import { Injectable, CanActivate, ExecutionContext, SetMetadata, Logger, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 
 export enum UserRole {
@@ -12,6 +12,8 @@ export const Roles = (...roles: UserRole[]) => SetMetadata('roles', roles);
 
 @Injectable()
 export class RolesGuard implements CanActivate {
+  private readonly logger = new Logger(RolesGuard.name);
+
   constructor(private reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
@@ -27,7 +29,20 @@ export class RolesGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const user = request.user;
 
-    return requiredRoles.some((role) => user?.role === role);
+    if (!user) {
+      this.logger.warn(`Unauthorized access attempt - No user in request`);
+      throw new UnauthorizedException('User not authenticated');
+    }
+
+    const hasRole = requiredRoles.some((role) => user?.role === role);
+
+    if (!hasRole) {
+      this.logger.warn(
+        `Unauthorized access attempt: User ${user.login} (role: ${user.role}) tried to access ${context.getClass().name}.${context.getHandler().name} - Required roles: ${requiredRoles.join(', ')}`
+      );
+    }
+
+    return hasRole;
   }
 }
 

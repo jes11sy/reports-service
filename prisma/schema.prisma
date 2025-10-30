@@ -56,6 +56,11 @@ model Order {
   @@index([operatorNameId])
   @@index([createDate])
   @@index([avitoName])
+  // Новые оптимизированные индексы для производительности
+  @@index([operatorNameId, createDate])
+  @@index([city, createDate, statusOrder])
+  @@index([rk, createDate])
+  @@index([statusOrder, closingData])
   @@map("orders")
 }
 
@@ -174,6 +179,10 @@ model Call {
   @@index([phoneAts])
   @@index([avitoName])
   @@index([callId])
+  // Новые составные индексы для аналитики
+  @@index([operatorId, dateCreate, status])
+  @@index([city, dateCreate])
+  @@index([dateCreate, status])
   @@map("calls")
 }
 

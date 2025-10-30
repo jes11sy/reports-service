@@ -1,8 +1,9 @@
 import { Controller, Get, Query, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { AnalyticsService } from './analytics.service';
 import { RolesGuard, Roles, UserRole } from '../auth/roles.guard';
+import { AnalyticsQueryDto, DashboardQueryDto } from './dto/analytics-query.dto';
 
 @ApiTags('analytics')
 @Controller('analytics')
@@ -15,18 +16,11 @@ export class AnalyticsController {
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Получить статистику операторов' })
-  @ApiQuery({ name: 'startDate', required: false, type: String, example: '2024-01-01' })
-  @ApiQuery({ name: 'endDate', required: false, type: String, example: '2024-12-31' })
-  @ApiQuery({ name: 'operatorId', required: false, type: Number })
-  async getOperatorStatistics(
-    @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string,
-    @Query('operatorId') operatorId?: string,
-  ) {
+  async getOperatorStatistics(@Query() query: AnalyticsQueryDto) {
     return this.analyticsService.getOperatorStatistics(
-      startDate,
-      endDate,
-      operatorId ? +operatorId : undefined,
+      query.startDate,
+      query.endDate,
+      query.operatorId,
     );
   }
 
@@ -36,13 +30,8 @@ export class AnalyticsController {
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Получить аналитику по городам' })
-  @ApiQuery({ name: 'startDate', required: false, type: String })
-  @ApiQuery({ name: 'endDate', required: false, type: String })
-  async getCityAnalytics(
-    @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string,
-  ) {
-    return this.analyticsService.getCityAnalytics(startDate, endDate);
+  async getCityAnalytics(@Query() query: AnalyticsQueryDto) {
+    return this.analyticsService.getCityAnalytics(query.startDate, query.endDate);
   }
 
   @Get('campaigns')
@@ -51,13 +40,8 @@ export class AnalyticsController {
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Получить аналитику по рекламным кампаниям (РК)' })
-  @ApiQuery({ name: 'startDate', required: false, type: String })
-  @ApiQuery({ name: 'endDate', required: false, type: String })
-  async getCampaignAnalytics(
-    @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string,
-  ) {
-    return this.analyticsService.getCampaignAnalytics(startDate, endDate);
+  async getCampaignAnalytics(@Query() query: AnalyticsQueryDto) {
+    return this.analyticsService.getCampaignAnalytics(query.startDate, query.endDate);
   }
 
   @Get('daily')
@@ -66,15 +50,8 @@ export class AnalyticsController {
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Получить дневную метрику' })
-  @ApiQuery({ name: 'startDate', required: false, type: String })
-  @ApiQuery({ name: 'endDate', required: false, type: String })
-  @ApiQuery({ name: 'city', required: false, type: String })
-  async getDailyMetrics(
-    @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string,
-    @Query('city') city?: string,
-  ) {
-    return this.analyticsService.getDailyMetrics(startDate, endDate, city);
+  async getDailyMetrics(@Query() query: AnalyticsQueryDto) {
+    return this.analyticsService.getDailyMetrics(query.startDate, query.endDate, query.city);
   }
 
   @Get('dashboard')
@@ -83,9 +60,8 @@ export class AnalyticsController {
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN, UserRole.CALLCENTRE_OPERATOR)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Получить данные для дашборда' })
-  @ApiQuery({ name: 'period', required: false, enum: ['today', 'week', 'month'] })
-  async getDashboardData(@Query('period') period?: 'today' | 'week' | 'month') {
-    return this.analyticsService.getDashboardData(period || 'today');
+  async getDashboardData(@Query() query: DashboardQueryDto) {
+    return this.analyticsService.getDashboardData(query.period || 'today');
   }
 
   @Get('performance')
@@ -94,13 +70,8 @@ export class AnalyticsController {
   @Roles(UserRole.DIRECTOR)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Получить метрики производительности' })
-  @ApiQuery({ name: 'startDate', required: false, type: String })
-  @ApiQuery({ name: 'endDate', required: false, type: String })
-  async getPerformanceMetrics(
-    @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string,
-  ) {
-    return this.analyticsService.getPerformanceMetrics(startDate, endDate);
+  async getPerformanceMetrics(@Query() query: AnalyticsQueryDto) {
+    return this.analyticsService.getPerformanceMetrics(query.startDate, query.endDate);
   }
 }
 
