@@ -59,7 +59,7 @@ export class ReportsController {
   @Get('city')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.DIRECTOR)
+  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @ApiOperation({ summary: 'Get city report' })
   async getCityReport(@Query() query: any, @Request() req: any) {
     console.log('Controller - req.user:', req.user);
@@ -69,7 +69,7 @@ export class ReportsController {
   @Get('city/:city')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.DIRECTOR)
+  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @ApiOperation({ summary: 'Get detailed city report' })
   async getCityDetailedReport(@Query() query: any, @Param('city') city: string) {
     return this.reportsService.getCityDetailedReport(city, query);
