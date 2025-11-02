@@ -32,7 +32,7 @@ export class ReportsController {
   @Get('masters')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.DIRECTOR)
+  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @ApiOperation({ summary: 'Get masters report' })
   async getMastersReport(@Query() query: any, @Request() req: any) {
     return this.reportsService.getMastersReport(query, req.user);
