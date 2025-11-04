@@ -326,24 +326,18 @@ export class StatsService {
     // Получаем количество заказов
     const orders = await this.prisma.order.count();
 
-    // Оборот - сумма "чистыми" (result - clean) по всем закрытым заказам
-    const closedOrders = await this.prisma.order.findMany({
+    // Оборот - сумма "чистыми" (clean) по всем закрытым заказам
+    const revenueSum = await this.prisma.order.aggregate({
       where: {
-        statusOrder: 'Готово', // Не 'Закрыт', а 'Готово'!
-        result: { not: null }
+        statusOrder: 'Готово',
+        clean: { not: null }
       },
-      select: {
-        result: true,
-        clean: true,
+      _sum: {
+        clean: true
       }
     });
 
-    let revenue = 0;
-    closedOrders.forEach(order => {
-      const result = Number(order.result) || 0;
-      const clean = Number(order.clean) || 0;
-      revenue += (result - clean); // Чистыми = result - clean
-    });
+    const revenue = revenueSum._sum.clean ? Number(revenueSum._sum.clean) : 0;
 
     // Прибыль - сумма приходов из таблицы Cash (если есть данные, иначе 0)
     const [incomeSum, expenseSum] = await Promise.all([
