@@ -307,6 +307,103 @@ export class StatsService {
 
     return response;
   }
+
+  /**
+   * Получить статистику для главного дашборда админки
+   */
+  async getDashboardStats() {
+    // Получаем количество сотрудников по типам
+    const [callCenterEmployees, directors, masters] = await Promise.all([
+      this.prisma.callcentreOperator.count({
+        where: { statusWork: 'Работает' }
+      }),
+      this.prisma.director.count({
+        where: { statusWork: 'Работает' }
+      }),
+      this.prisma.master.count({
+        where: { statusWork: 'Работает' }
+      })
+    ]);
+
+    // Получаем количество заказов
+    const orders = await this.prisma.order.count();
+
+    // Финансовая статистика - суммируем все закрытые заказы
+    const closedOrders = await this.prisma.order.findMany({
+      where: {
+        statusOrder: 'Закрыт',
+        result: { not: null }
+      },
+      select: {
+        result: true,
+        expenditure: true,
+        clean: true,
+      }
+    });
+
+    // Считаем финансы
+    let revenue = 0;
+    let expenses = 0;
+    let profit = 0;
+
+    closedOrders.forEach(order => {
+      const orderRevenue = Number(order.result) || 0;
+      const orderExpenses = (Number(order.expenditure) || 0) + (Number(order.clean) || 0);
+      
+      revenue += orderRevenue;
+      expenses += orderExpenses;
+      profit += (orderRevenue - orderExpenses);
+    });
+
+    // Авито: средняя цена заказа с Авито за последний месяц
+    const oneMonthAgo = new Date();
+    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+
+    const avitoOrders = await this.prisma.order.findMany({
+      where: {
+        statusOrder: 'Закрыт',
+        result: { not: null },
+        avitoChatId: { not: null }, // Заказы с Авито
+        closingData: {
+          gte: oneMonthAgo
+        }
+      },
+      select: {
+        result: true
+      }
+    });
+
+    let avitoOrderPrice = 0;
+    if (avitoOrders.length > 0) {
+      const totalAvitoRevenue = avitoOrders.reduce((sum, order) => sum + (Number(order.result) || 0), 0);
+      avitoOrderPrice = Math.round(totalAvitoRevenue / avitoOrders.length);
+    }
+
+    const response = {
+      employees: {
+        callCenter: callCenterEmployees,
+        directors: directors,
+        masters: masters
+      },
+      orders: orders,
+      finance: {
+        revenue: Math.round(revenue),
+        profit: Math.round(profit),
+        expenses: Math.round(expenses)
+      },
+      avito: {
+        orderPrice: avitoOrderPrice
+      }
+    };
+
+    this.logger.log('Статистика дашборда получена', {
+      employees: response.employees,
+      orders: response.orders,
+      finance: response.finance
+    });
+
+    return response;
+  }
 }
 
 

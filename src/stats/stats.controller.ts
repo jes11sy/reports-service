@@ -70,5 +70,16 @@ export class StatsController {
   ) {
     return this.statsService.getOverallStats(startDate, endDate);
   }
+
+  // Статистика для главного дашборда админки
+  @Get('dashboard')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @ApiBearerAuth()
+  @Roles(UserRole.CALLCENTRE_ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Получить статистику для дашборда админки' })
+  async getDashboardStats() {
+    return this.statsService.getDashboardStats();
+  }
 }
 
