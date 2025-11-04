@@ -315,11 +315,11 @@ export class StatsService {
     // Получаем количество сотрудников по типам
     const [callCenterEmployees, directors, masters] = await Promise.all([
       this.prisma.callcentreOperator.count({
-        where: { statusWork: 'Работает' }
+        where: { statusWork: 'active' } // У операторов - 'active'!
       }),
       this.prisma.director.count(), // У директоров нет поля statusWork
       this.prisma.master.count({
-        where: { statusWork: 'Работает' }
+        where: { statusWork: 'работает' } // У мастеров - 'работает'!
       })
     ]);
 
