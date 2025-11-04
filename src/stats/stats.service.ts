@@ -317,9 +317,7 @@ export class StatsService {
       this.prisma.callcentreOperator.count({
         where: { statusWork: 'Работает' }
       }),
-      this.prisma.director.count({
-        where: { statusWork: 'Работает' }
-      }),
+      this.prisma.director.count(), // У директоров нет поля statusWork
       this.prisma.master.count({
         where: { statusWork: 'Работает' }
       })
