@@ -315,66 +315,68 @@ export class StatsService {
     // Получаем количество сотрудников по типам
     const [callCenterEmployees, directors, masters] = await Promise.all([
       this.prisma.callcentreOperator.count({
-        where: { statusWork: 'active' } // У операторов - 'active'!
+        where: { status: 'active' } // У операторов - status, а не statusWork!
       }),
       this.prisma.director.count(), // У директоров нет поля statusWork
       this.prisma.master.count({
-        where: { statusWork: 'работает' } // У мастеров - 'работает'!
+        where: { statusWork: 'работает' } // У мастеров - statusWork!
       })
     ]);
 
     // Получаем количество заказов
     const orders = await this.prisma.order.count();
 
-    // Финансовая статистика - суммируем все закрытые заказы
+    // Оборот - сумма "чистыми" (result - clean) по всем закрытым заказам
     const closedOrders = await this.prisma.order.findMany({
       where: {
-        statusOrder: 'Закрыт',
+        statusOrder: 'Готово', // Не 'Закрыт', а 'Готово'!
         result: { not: null }
       },
       select: {
         result: true,
-        expenditure: true,
         clean: true,
       }
     });
 
-    // Считаем финансы
     let revenue = 0;
-    let expenses = 0;
-    let profit = 0;
-
     closedOrders.forEach(order => {
-      const orderRevenue = Number(order.result) || 0;
-      const orderExpenses = (Number(order.expenditure) || 0) + (Number(order.clean) || 0);
-      
-      revenue += orderRevenue;
-      expenses += orderExpenses;
-      profit += (orderRevenue - orderExpenses);
+      const result = Number(order.result) || 0;
+      const clean = Number(order.clean) || 0;
+      revenue += (result - clean); // Чистыми = result - clean
     });
 
-    // Авито: средняя цена заказа с Авито за последний месяц
-    const oneMonthAgo = new Date();
-    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+    // Прибыль - сумма приходов из таблицы Cash (если есть данные, иначе 0)
+    const [incomeSum, expenseSum] = await Promise.all([
+      this.prisma.cash.aggregate({
+        where: { name: 'приход' },
+        _sum: { amount: true }
+      }),
+      this.prisma.cash.aggregate({
+        where: { name: 'расход' },
+        _sum: { amount: true }
+      })
+    ]);
 
-    const avitoOrders = await this.prisma.order.findMany({
-      where: {
-        statusOrder: 'Закрыт',
-        result: { not: null },
-        avitoChatId: { not: null }, // Заказы с Авито
-        closingData: {
-          gte: oneMonthAgo
-        }
-      },
-      select: {
-        result: true
-      }
-    });
+    const profit = incomeSum._sum.amount ? Number(incomeSum._sum.amount) : 0;
+    const expenses = expenseSum._sum.amount ? Number(expenseSum._sum.amount) : 0;
+
+    // Цена заказа Авито - расходы с paymentPurpose "Авито" / кол-во заказов с РК "Авито"
+    const [avitoExpenses, avitoOrdersCount] = await Promise.all([
+      this.prisma.cash.aggregate({
+        where: {
+          name: 'расход',
+          paymentPurpose: 'Авито'
+        },
+        _sum: { amount: true }
+      }),
+      this.prisma.order.count({
+        where: { rk: 'Авито' }
+      })
+    ]);
 
     let avitoOrderPrice = 0;
-    if (avitoOrders.length > 0) {
-      const totalAvitoRevenue = avitoOrders.reduce((sum, order) => sum + (Number(order.result) || 0), 0);
-      avitoOrderPrice = Math.round(totalAvitoRevenue / avitoOrders.length);
+    if (avitoOrdersCount > 0 && avitoExpenses._sum.amount) {
+      avitoOrderPrice = Math.round(Number(avitoExpenses._sum.amount) / avitoOrdersCount);
     }
 
     const response = {
