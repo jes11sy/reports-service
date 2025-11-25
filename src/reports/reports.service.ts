@@ -525,8 +525,8 @@ export class ReportsService {
             id: true
           },
           _sum: {
-            result: true,  // Оборот
-            clean: true    // Выручка
+            clean: true,         // Оборот (сумма чистыми)
+            masterChange: true   // Выручка (сдача мастера)
           }
         });
 
@@ -535,8 +535,8 @@ export class ReportsService {
           rk: campaign.rk,
           avitoName: campaign.avitoName,
           ordersCount: campaign._count.id,
-          revenue: campaign._sum.result ? Number(campaign._sum.result) : 0,
-          profit: campaign._sum.clean ? Number(campaign._sum.clean) : 0
+          revenue: campaign._sum.clean ? Number(campaign._sum.clean) : 0,           // Оборот = чистыми
+          profit: campaign._sum.masterChange ? Number(campaign._sum.masterChange) : 0  // Выручка = сдача мастера
         }));
 
         return {
