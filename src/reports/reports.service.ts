@@ -462,6 +462,95 @@ export class ReportsService {
       data: cityStats,
     };
   }
+
+  async getCampaignsReport(query: any, user?: any) {
+    console.log('=== getCampaignsReport START ===');
+    console.log('getCampaignsReport called with user:', user);
+    console.log('getCampaignsReport called with query:', query);
+    
+    const { startDate, endDate, city } = query;
+
+    const orderWhere: any = {};
+    
+    // Фильтр по датам (используем closingData для закрытых заказов)
+    if (startDate || endDate) {
+      orderWhere.closingData = {};
+      if (startDate) orderWhere.closingData.gte = new Date(startDate);
+      if (endDate) orderWhere.closingData.lte = new Date(endDate);
+    }
+    
+    // Если указан конкретный город
+    if (city) {
+      if (user?.role === 'director' && user?.cities && !user.cities.includes(city)) {
+        // Если директор пытается посмотреть город, которого нет в его списке
+        return { success: true, data: [] };
+      }
+      orderWhere.city = city;
+    }
+
+    // Получаем уникальные города
+    let cities;
+    if (user?.role === 'director' && user?.cities) {
+      // Для директора показываем только его города
+      console.log('Director cities:', user.cities);
+      cities = user.cities.map(cityName => ({ city: cityName }));
+      console.log('Filtered cities for director:', cities);
+    } else {
+      // Для других ролей получаем все города из базы
+      cities = await this.prisma.order.findMany({
+        select: { city: true },
+        distinct: ['city'],
+        where: orderWhere,
+      });
+    }
+
+    // Для каждого города получаем статистику по РК и мастерам
+    const cityReports = await Promise.all(
+      cities.map(async (cityData) => {
+        const cityWhere = { ...orderWhere, city: cityData.city };
+        
+        // Для директора дополнительно проверяем, что город в его списке
+        if (user?.role === 'director' && user?.cities && !user.cities.includes(cityData.city)) {
+          return null; // Пропускаем город, которого нет у директора
+        }
+        
+        // Получаем уникальные комбинации РК и avitoName для этого города
+        const campaigns = await this.prisma.order.groupBy({
+          by: ['rk', 'avitoName'],
+          where: {
+            ...cityWhere,
+            statusOrder: { in: ['Готово', 'Отказ'] } // Учитываем только закрытые заказы
+          },
+          _count: {
+            id: true
+          },
+          _sum: {
+            result: true,  // Оборот
+            clean: true    // Выручка
+          }
+        });
+
+        // Форматируем данные по кампаниям
+        const campaignsData = campaigns.map(campaign => ({
+          rk: campaign.rk,
+          avitoName: campaign.avitoName,
+          ordersCount: campaign._count.id,
+          revenue: campaign._sum.result ? Number(campaign._sum.result) : 0,
+          profit: campaign._sum.clean ? Number(campaign._sum.clean) : 0
+        }));
+
+        return {
+          city: cityData.city,
+          campaigns: campaignsData
+        };
+      })
+    );
+
+    return {
+      success: true,
+      data: cityReports.filter(report => report !== null),
+    };
+  }
 }
 
 

@@ -47,3 +47,11 @@ export class ExportQueryDto extends OrdersReportQueryDto {
   type?: string;
 }
 
+export class CampaignsReportQueryDto extends DateRangeDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  city?: string;
+}
+

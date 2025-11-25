@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { ReportsService } from './reports.service';
 import { RolesGuard, Roles, UserRole } from '../auth/roles.guard';
+import { CampaignsReportQueryDto } from './dto/reports-query.dto';
 
 @ApiTags('reports')
 @Controller('reports')
@@ -73,6 +74,15 @@ export class ReportsController {
   @ApiOperation({ summary: 'Get detailed city report' })
   async getCityDetailedReport(@Query() query: any, @Param('city') city: string) {
     return this.reportsService.getCityDetailedReport(city, query);
+  }
+
+  @Get('campaigns')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @ApiBearerAuth()
+  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @ApiOperation({ summary: 'Get campaigns report by cities' })
+  async getCampaignsReport(@Query() query: CampaignsReportQueryDto, @Request() req: any) {
+    return this.reportsService.getCampaignsReport(query, req.user);
   }
 
   @Get('export/excel')
