@@ -289,26 +289,53 @@ export class ReportsService {
           return null; // Пропускаем город, которого нет у директора
         }
         
-        const [closedOrders, refusals, notOrders, totalClean, totalMasterChange, avgCheck] = await Promise.all([
-          // Закрытых заказов = Готово + Отказ
-          this.prisma.order.count({ where: { ...cityWhere, statusOrder: { in: ['Готово', 'Отказ'] } } }),
+        const [
+          totalOrders,        // Всего заказов (Готово + Отказ + Незаказ)
+          completedOrders,    // Выполненных (Готово)
+          refusals,           // Отказов
+          notOrders,          // Незаказ
+          zeroOrders,         // Ноль (Готово с result=0 или null)
+          totalResult,        // Сумма итогов (result) - Оборот
+          totalClean,         // Сумма чистыми - Прибыль
+          totalMasterChange,  // Сумма сдача мастера - СД
+          maxCheck,           // Максимальный чек
+          microCheckCount,    // Микрочек (до 10к)
+          over10kCount,       // От 10к
+        ] = await Promise.all([
+          // Всего заказов = Готово + Отказ + Незаказ
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: { in: ['Готово', 'Отказ', 'Незаказ'] } } }),
+          // Выполненных = Готово
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово' } }),
+          // Отказов
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Отказ' } }),
+          // Незаказ
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Незаказ' } }),
-          // Сумма чистыми только по статусу "Готово"
+          // Ноль = Готово с result=0 или null
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово', OR: [{ result: 0 }, { result: null }] } }),
+          // Оборот = сумма result по статусу Готово
+          this.prisma.order.aggregate({
+            where: { ...cityWhere, statusOrder: 'Готово', result: { not: null } },
+            _sum: { result: true },
+          }),
+          // Прибыль = сумма чистыми только по статусу "Готово"
           this.prisma.order.aggregate({
             where: { ...cityWhere, statusOrder: 'Готово', clean: { not: null } },
             _sum: { clean: true },
           }),
-          // Сумма сдача мастера только по статусу "Готово"
+          // СД = сумма сдача мастера только по статусу "Готово"
           this.prisma.order.aggregate({
             where: { ...cityWhere, statusOrder: 'Готово', masterChange: { not: null } },
             _sum: { masterChange: true },
           }),
-          // Средний чек = сумма чистыми / количество закрытых заказов (Готово + Отказ)
+          // Максимальный чек
           this.prisma.order.aggregate({
-            where: { ...cityWhere, statusOrder: 'Готово', clean: { not: null } },
-            _avg: { clean: true },
+            where: { ...cityWhere, statusOrder: 'Готово', result: { not: null, gt: 0 } },
+            _max: { result: true },
           }),
+          // Микрочек (до 10к) - заказы с result > 0 и < 10000
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово', result: { gt: 0, lt: 10000 } } }),
+          // От 10к - заказы с result >= 10000
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово', result: { gte: 10000 } } }),
         ]);
 
         // Получаем данные по кассе для города (без фильтрации по дате)
@@ -330,19 +357,49 @@ export class ReportsService {
         const expense = expenseData._sum.amount ? Number(expenseData._sum.amount) : 0;
         const totalAmount = income - expense;
 
-        // Правильный расчет среднего чека: сумма чистыми / количество закрытых заказов
-        const totalCleanAmount = totalClean._sum.clean ? Number(totalClean._sum.clean) : 0;
-        const correctAvgCheck = closedOrders > 0 ? totalCleanAmount / closedOrders : 0;
+        // Расчёты
+        const turnover = totalResult._sum.result ? Number(totalResult._sum.result) : 0; // Оборот
+        const profit = totalClean._sum.clean ? Number(totalClean._sum.clean) : 0; // Прибыль
+        const masterHandover = totalMasterChange._sum.masterChange ? Number(totalMasterChange._sum.masterChange) : 0; // СД
+        const maxCheckValue = maxCheck._max.result ? Number(maxCheck._max.result) : 0; // Макс чек
+        
+        // Закрытые заказы (для обратной совместимости) = Готово + Отказ
+        const closedOrders = completedOrders + refusals;
+        
+        // Средний чек = Оборот / Выполненных (Готово)
+        const avgCheck = completedOrders > 0 ? turnover / completedOrders : 0;
+        
+        // Выполненных в деньги (%) = Выполненных / (Готово + Отказ) * 100
+        const completedPercent = closedOrders > 0 ? (completedOrders / closedOrders) * 100 : 0;
+        
+        // Эффективность = Выполненных / Всего заказов * 100
+        const efficiency = totalOrders > 0 ? (completedOrders / totalOrders) * 100 : 0;
 
         return {
           city: cityData.city,
           orders: {
-            closedOrders,
+            closedOrders,       // Для обратной совместимости
             refusals,
             notOrders,
-            totalClean: totalCleanAmount,
-            totalMasterChange: totalMasterChange._sum.masterChange ? Number(totalMasterChange._sum.masterChange) : 0,
-            avgCheck: correctAvgCheck,
+            totalClean: profit, // Для обратной совместимости
+            totalMasterChange: masterHandover, // Для обратной совместимости
+            avgCheck,           // Для обратной совместимости
+          },
+          // Новые расширенные поля
+          stats: {
+            turnover,           // Оборот
+            profit,             // Прибыль
+            totalOrders,        // Заказов (всего)
+            notOrders,          // Не заказ
+            zeroOrders,         // Ноль
+            completedOrders,    // Выполненных
+            completedPercent,   // Вып в деньги (%)
+            microCheckCount,    // Микрочек (до 10к)
+            over10kCount,       // От 10к
+            efficiency,         // Эффективность
+            avgCheck,           // Ср чек
+            maxCheck: maxCheckValue, // Макс чек
+            masterHandover,     // СД
           },
           cash: {
             totalAmount: totalAmount,
