@@ -302,7 +302,7 @@ export class ReportsService {
           over10kCount,       // От 10к - Готово с clean >= 10000
           modernOrders,       // СД - кол-во заказов со статусом Модерн
         ] = await Promise.all([
-          // Всего заказов = Готово + Отказ + Незаказ
+          // Всего заказов = Готово + Отказ + Незаказ (без Модерн, т.к. у них нет closingData)
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: { in: ['Готово', 'Отказ', 'Незаказ'] } } }),
           // Выполненных = Готово + Отказ
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: { in: ['Готово', 'Отказ'] } } }),
@@ -365,9 +365,6 @@ export class ReportsService {
         // Выполненных в деньги (%) = Готово с clean > 0 / Выполненных (Готово + Отказ) * 100
         const completedPercent = completedOrders > 0 ? (completedWithMoney / completedOrders) * 100 : 0;
         
-        // Эффективность = (Выполненных + СД) / (Заказов - Не заказ) * 100
-        const ordersWithoutNotOrders = totalOrders - notOrders;
-        const efficiency = ordersWithoutNotOrders > 0 ? ((completedOrders + modernOrders) / ordersWithoutNotOrders) * 100 : 0;
 
         return {
           city: cityData.city,
@@ -390,7 +387,6 @@ export class ReportsService {
             completedPercent,   // Вып в деньги (%)
             microCheckCount,    // Микрочек (до 10к)
             over10kCount,       // От 10к
-            efficiency,         // Эффективность
             avgCheck,           // Ср чек
             maxCheck: maxCheckValue, // Макс чек
             masterHandover: modernOrders,     // СД = кол-во Модерн
