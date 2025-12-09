@@ -331,8 +331,8 @@ export class ReportsService {
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово', clean: { gt: 0, lt: 10000 } } }),
           // От 10к - Готово с clean >= 10000
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово', clean: { gte: 10000 } } }),
-          // СД = кол-во заказов со статусом Модерн
-          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Модерн' } }),
+          // СД = кол-во заказов со статусом Модерн (без фильтра по дате закрытия, т.к. они ещё не закрыты)
+          this.prisma.order.count({ where: { city: { equals: cityData.city, mode: 'insensitive' }, statusOrder: 'Модерн' } }),
         ]);
 
         // Получаем данные по кассе для города (без фильтрации по дате)
