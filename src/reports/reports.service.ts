@@ -291,8 +291,7 @@ export class ReportsService {
         
         const [
           totalOrders,        // Всего заказов (Готово + Отказ + Незаказ)
-          completedOrders,    // Выполненных (Готово)
-          refusals,           // Отказов
+          completedOrders,    // Выполненных (Готово + Отказ)
           notOrders,          // Незаказ
           zeroOrders,         // Ноль (Готово/Отказ с clean=0 или null)
           completedWithMoney, // Выполненных в деньги (Готово с clean > 0)
@@ -305,10 +304,8 @@ export class ReportsService {
         ] = await Promise.all([
           // Всего заказов = Готово + Отказ + Незаказ
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: { in: ['Готово', 'Отказ', 'Незаказ'] } } }),
-          // Выполненных = Готово
-          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово' } }),
-          // Отказов
-          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Отказ' } }),
+          // Выполненных = Готово + Отказ
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: { in: ['Готово', 'Отказ'] } } }),
           // Незаказ
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Незаказ' } }),
           // Ноль = Готово/Отказ с clean=0 или null
@@ -362,14 +359,11 @@ export class ReportsService {
         const profit = totalMasterChange._sum.masterChange ? Number(totalMasterChange._sum.masterChange) : 0; // Прибыль = сумма сдача мастера
         const maxCheckValue = maxCheck._max.clean ? Number(maxCheck._max.clean) : 0; // Макс чек (по clean)
         
-        // Закрытые заказы (для обратной совместимости) = Готово + Отказ
-        const closedOrders = completedOrders + refusals;
-        
-        // Средний чек = Оборот / Выполненных (Готово)
+        // Средний чек = Оборот / Выполненных (Готово + Отказ)
         const avgCheck = completedOrders > 0 ? turnover / completedOrders : 0;
         
-        // Выполненных в деньги (%) = Готово с clean > 0 / (Готово + Отказ) * 100
-        const completedPercent = closedOrders > 0 ? (completedWithMoney / closedOrders) * 100 : 0;
+        // Выполненных в деньги (%) = Готово с clean > 0 / Выполненных (Готово + Отказ) * 100
+        const completedPercent = completedOrders > 0 ? (completedWithMoney / completedOrders) * 100 : 0;
         
         // Эффективность = (Выполненных + СД) / (Заказов - Не заказ) * 100
         const ordersWithoutNotOrders = totalOrders - notOrders;
@@ -378,8 +372,8 @@ export class ReportsService {
         return {
           city: cityData.city,
           orders: {
-            closedOrders,       // Для обратной совместимости
-            refusals,
+            closedOrders: completedOrders,       // Для обратной совместимости (Готово + Отказ)
+            refusals: 0,        // Убрали отдельный подсчёт
             notOrders,
             totalClean: turnover, // Для обратной совместимости
             totalMasterChange: profit, // Для обратной совместимости
