@@ -294,13 +294,14 @@ export class ReportsService {
           completedOrders,    // Выполненных (Готово)
           refusals,           // Отказов
           notOrders,          // Незаказ
-          zeroOrders,         // Ноль (Готово с result=0 или null)
-          totalResult,        // Сумма итогов (result) - Оборот
-          totalClean,         // Сумма чистыми - Прибыль
-          totalMasterChange,  // Сумма сдача мастера - СД
-          maxCheck,           // Максимальный чек
-          microCheckCount,    // Микрочек (до 10к)
-          over10kCount,       // От 10к
+          zeroOrders,         // Ноль (Готово/Отказ с clean=0 или null)
+          completedWithMoney, // Выполненных в деньги (Готово с clean > 0)
+          totalClean,         // Сумма чистыми - Оборот
+          totalMasterChange,  // Сумма сдача мастера - Прибыль
+          maxCheck,           // Максимальный чек (по clean)
+          microCheckCount,    // Микрочек (до 10к) - Готово с clean < 10000 и > 0
+          over10kCount,       // От 10к - Готово с clean >= 10000
+          modernOrders,       // СД - кол-во заказов со статусом Модерн
         ] = await Promise.all([
           // Всего заказов = Готово + Отказ + Незаказ
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: { in: ['Готово', 'Отказ', 'Незаказ'] } } }),
@@ -310,32 +311,31 @@ export class ReportsService {
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Отказ' } }),
           // Незаказ
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Незаказ' } }),
-          // Ноль = Готово с result=0 или null
-          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово', OR: [{ result: 0 }, { result: null }] } }),
-          // Оборот = сумма result по статусу Готово
-          this.prisma.order.aggregate({
-            where: { ...cityWhere, statusOrder: 'Готово', result: { not: null } },
-            _sum: { result: true },
-          }),
-          // Прибыль = сумма чистыми только по статусу "Готово"
+          // Ноль = Готово/Отказ с clean=0 или null
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: { in: ['Готово', 'Отказ'] }, OR: [{ clean: 0 }, { clean: null }] } }),
+          // Выполненных в деньги = Готово с clean > 0
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово', clean: { gt: 0 } } }),
+          // Оборот = сумма чистыми только по статусу "Готово"
           this.prisma.order.aggregate({
             where: { ...cityWhere, statusOrder: 'Готово', clean: { not: null } },
             _sum: { clean: true },
           }),
-          // СД = сумма сдача мастера только по статусу "Готово"
+          // Прибыль = сумма сдача мастера только по статусу "Готово"
           this.prisma.order.aggregate({
             where: { ...cityWhere, statusOrder: 'Готово', masterChange: { not: null } },
             _sum: { masterChange: true },
           }),
-          // Максимальный чек
+          // Максимальный чек (по clean)
           this.prisma.order.aggregate({
-            where: { ...cityWhere, statusOrder: 'Готово', result: { not: null, gt: 0 } },
-            _max: { result: true },
+            where: { ...cityWhere, statusOrder: 'Готово', clean: { not: null, gt: 0 } },
+            _max: { clean: true },
           }),
-          // Микрочек (до 10к) - заказы с result > 0 и < 10000
-          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово', result: { gt: 0, lt: 10000 } } }),
-          // От 10к - заказы с result >= 10000
-          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово', result: { gte: 10000 } } }),
+          // Микрочек (до 10к) - Готово с clean > 0 и < 10000
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово', clean: { gt: 0, lt: 10000 } } }),
+          // От 10к - Готово с clean >= 10000
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово', clean: { gte: 10000 } } }),
+          // СД = кол-во заказов со статусом Модерн
+          this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Модерн' } }),
         ]);
 
         // Получаем данные по кассе для города (без фильтрации по дате)
@@ -358,10 +358,9 @@ export class ReportsService {
         const totalAmount = income - expense;
 
         // Расчёты
-        const turnover = totalResult._sum.result ? Number(totalResult._sum.result) : 0; // Оборот
-        const profit = totalClean._sum.clean ? Number(totalClean._sum.clean) : 0; // Прибыль
-        const masterHandover = totalMasterChange._sum.masterChange ? Number(totalMasterChange._sum.masterChange) : 0; // СД
-        const maxCheckValue = maxCheck._max.result ? Number(maxCheck._max.result) : 0; // Макс чек
+        const turnover = totalClean._sum.clean ? Number(totalClean._sum.clean) : 0; // Оборот = сумма чистыми
+        const profit = totalMasterChange._sum.masterChange ? Number(totalMasterChange._sum.masterChange) : 0; // Прибыль = сумма сдача мастера
+        const maxCheckValue = maxCheck._max.clean ? Number(maxCheck._max.clean) : 0; // Макс чек (по clean)
         
         // Закрытые заказы (для обратной совместимости) = Готово + Отказ
         const closedOrders = completedOrders + refusals;
@@ -369,11 +368,12 @@ export class ReportsService {
         // Средний чек = Оборот / Выполненных (Готово)
         const avgCheck = completedOrders > 0 ? turnover / completedOrders : 0;
         
-        // Выполненных в деньги (%) = Выполненных / (Готово + Отказ) * 100
-        const completedPercent = closedOrders > 0 ? (completedOrders / closedOrders) * 100 : 0;
+        // Выполненных в деньги (%) = Готово с clean > 0 / (Готово + Отказ) * 100
+        const completedPercent = closedOrders > 0 ? (completedWithMoney / closedOrders) * 100 : 0;
         
-        // Эффективность = Выполненных / Всего заказов * 100
-        const efficiency = totalOrders > 0 ? (completedOrders / totalOrders) * 100 : 0;
+        // Эффективность = (Выполненных + СД) / (Заказов - Не заказ) * 100
+        const ordersWithoutNotOrders = totalOrders - notOrders;
+        const efficiency = ordersWithoutNotOrders > 0 ? ((completedOrders + modernOrders) / ordersWithoutNotOrders) * 100 : 0;
 
         return {
           city: cityData.city,
@@ -381,14 +381,14 @@ export class ReportsService {
             closedOrders,       // Для обратной совместимости
             refusals,
             notOrders,
-            totalClean: profit, // Для обратной совместимости
-            totalMasterChange: masterHandover, // Для обратной совместимости
+            totalClean: turnover, // Для обратной совместимости
+            totalMasterChange: profit, // Для обратной совместимости
             avgCheck,           // Для обратной совместимости
           },
           // Новые расширенные поля
           stats: {
-            turnover,           // Оборот
-            profit,             // Прибыль
+            turnover,           // Оборот = сумма чистыми
+            profit,             // Прибыль = сумма сдача мастера
             totalOrders,        // Заказов (всего)
             notOrders,          // Не заказ
             zeroOrders,         // Ноль
@@ -399,7 +399,7 @@ export class ReportsService {
             efficiency,         // Эффективность
             avgCheck,           // Ср чек
             maxCheck: maxCheckValue, // Макс чек
-            masterHandover,     // СД
+            masterHandover: modernOrders,     // СД = кол-во Модерн
           },
           cash: {
             totalAmount: totalAmount,
