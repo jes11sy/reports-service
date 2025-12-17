@@ -314,23 +314,16 @@ export class ReportsService {
 
     // 1. Группированная статистика по заказам (1 мощный запрос вместо 13*N)
     // Используем сырой SQL для максимальной эффективности
-    const dateCondition = startDate && endDate
-      ? `AND closing_data >= '${new Date(startDate).toISOString()}' AND closing_data <= '${new Date(endDate).toISOString()}'`
-      : startDate
-      ? `AND closing_data >= '${new Date(startDate).toISOString()}'`
-      : endDate
-      ? `AND closing_data <= '${new Date(endDate).toISOString()}'`
-      : '';
+    let dateCondition = '';
+    if (startDate && endDate) {
+      dateCondition = `AND closing_data >= '${new Date(startDate).toISOString()}' AND closing_data <= '${new Date(endDate).toISOString()}'`;
+    } else if (startDate) {
+      dateCondition = `AND closing_data >= '${new Date(startDate).toISOString()}'`;
+    } else if (endDate) {
+      dateCondition = `AND closing_data <= '${new Date(endDate).toISOString()}'`;
+    }
 
-    const orderStats = await this.prisma.$queryRawUnsafe<Array<{
-      city: string;
-      status_order: string;
-      count: bigint;
-      sum_clean: number;
-      sum_master_change: number;
-      max_clean: number;
-      partner: boolean;
-    }>>`
+    const orderStatsQuery = `
       SELECT 
         city,
         status_order,
@@ -341,31 +334,40 @@ export class ReportsService {
         COALESCE(MAX(clean), 0) as max_clean
       FROM orders
       WHERE city = ANY($1::text[])
-        ${dateCondition ? this.prisma.$queryRawUnsafe(dateCondition) : this.prisma.$queryRawUnsafe('')}
+        ${dateCondition}
       GROUP BY city, status_order, partner
-    `, cityList);
+    `;
+
+    const orderStats = await this.prisma.$queryRawUnsafe<Array<{
+      city: string;
+      status_order: string;
+      count: bigint;
+      sum_clean: number;
+      sum_master_change: number;
+      max_clean: number;
+      partner: boolean;
+    }>>(orderStatsQuery, cityList);
 
     // 2. Подсчёт специальных категорий (микрочек, 10к+) (1 запрос)
-    const checkCategories = await this.prisma.$queryRawUnsafe<Array<{
-      city: string;
-      micro_count: bigint;
-      over10k_count: bigint;
-    }>>`
+    const checkCategoriesQuery = `
       SELECT 
         city,
         COUNT(*) FILTER (WHERE status_order = 'Готово' AND clean > 0 AND clean < 10000) as micro_count,
         COUNT(*) FILTER (WHERE status_order = 'Готово' AND clean >= 10000) as over10k_count
       FROM orders
       WHERE city = ANY($1::text[])
-        ${dateCondition ? this.prisma.$queryRawUnsafe(dateCondition) : this.prisma.$queryRawUnsafe('')}
+        ${dateCondition}
       GROUP BY city
-    `, cityList);
+    `;
+
+    const checkCategories = await this.prisma.$queryRawUnsafe<Array<{
+      city: string;
+      micro_count: bigint;
+      over10k_count: bigint;
+    }>>(checkCategoriesQuery, cityList);
 
     // 3. Статистика "Модерн" (отдельно, т.к. без фильтра по closingData)
-    const modernStats = await this.prisma.$queryRawUnsafe<Array<{
-      city: string;
-      modern_count: bigint;
-    }>>`
+    const modernStatsQuery = `
       SELECT 
         city,
         COUNT(*) as modern_count
@@ -373,14 +375,15 @@ export class ReportsService {
       WHERE city = ANY($1::text[])
         AND status_order = 'Модерн'
       GROUP BY city
-    `, cityList);
+    `;
+
+    const modernStats = await this.prisma.$queryRawUnsafe<Array<{
+      city: string;
+      modern_count: bigint;
+    }>>(modernStatsQuery, cityList);
 
     // 4. Кассовая статистика по городам (1 запрос)
-    const cashStats = await this.prisma.$queryRawUnsafe<Array<{
-      city: string;
-      name: string;
-      total_amount: number;
-    }>>`
+    const cashStatsQuery = `
       SELECT 
         city,
         name,
@@ -388,7 +391,13 @@ export class ReportsService {
       FROM cash
       WHERE city = ANY($1::text[])
       GROUP BY city, name
-    `, cityList);
+    `;
+
+    const cashStats = await this.prisma.$queryRawUnsafe<Array<{
+      city: string;
+      name: string;
+      total_amount: number;
+    }>>(cashStatsQuery, cityList);
 
     // 5. Собираем данные в памяти (очень быстро)
     const cityStatsResult = cityList.map((cityName) => {

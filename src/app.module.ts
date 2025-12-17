@@ -30,11 +30,13 @@ import { StatsModule } from './stats/stats.module';
               port: redisPort,
             },
             password: redisPassword,
-            ttl: 60 * 1000, // 1 минута по умолчанию
           });
           
           console.log(`✅ Redis cache connected: ${redisHost}:${redisPort}`);
-          return { store };
+          return { 
+            store,
+            ttl: 60 * 1000, // 1 минута по умолчанию
+          };
         } catch (error) {
           console.warn('⚠️ Redis unavailable, using in-memory cache', error.message);
           return {
