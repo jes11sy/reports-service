@@ -46,6 +46,9 @@ model Order {
   cashApprovedBy       Int?         @map("cash_approved_by")
   cashApprovedDate     DateTime?    @map("cash_approved_date")
   
+  partner              Boolean?     @default(false)
+  partnerPercent       Decimal?     @map("partner_percent") @db.Decimal(5, 2)
+  
   master               Master?     @relation(fields: [masterId], references: [id])
   
   @@index([statusOrder, city])
