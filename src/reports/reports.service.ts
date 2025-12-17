@@ -295,7 +295,9 @@ export class ReportsService {
           notOrders,          // Незаказ
           zeroOrders,         // Ноль (Готово/Отказ с clean=0 или null)
           completedWithMoney, // Выполненных в деньги (Готово с clean > 0)
-          totalClean,         // Сумма чистыми - Оборот
+          totalClean,         // Сумма чистыми - Оборот (ВСЕ)
+          totalCleanOur,      // Сумма чистыми - Оборот Наш (partner = false)
+          totalCleanPartner,  // Сумма чистыми - Оборот Партнер (partner = true)
           totalMasterChange,  // Сумма сдача мастера - Прибыль
           maxCheck,           // Максимальный чек (по clean)
           microCheckCount,    // Микрочек (до 10к) - Готово с clean < 10000 и > 0
@@ -312,9 +314,19 @@ export class ReportsService {
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: { in: ['Готово', 'Отказ'] }, OR: [{ clean: 0 }, { clean: null }] } }),
           // Выполненных в деньги = Готово с clean > 0
           this.prisma.order.count({ where: { ...cityWhere, statusOrder: 'Готово', clean: { gt: 0 } } }),
-          // Оборот = сумма чистыми только по статусу "Готово"
+          // Оборот = сумма чистыми только по статусу "Готово" (ВСЕ)
           this.prisma.order.aggregate({
             where: { ...cityWhere, statusOrder: 'Готово', clean: { not: null } },
+            _sum: { clean: true },
+          }),
+          // Оборот Наш = сумма чистыми только по статусу "Готово" где partner = false или null
+          this.prisma.order.aggregate({
+            where: { ...cityWhere, statusOrder: 'Готово', clean: { not: null }, OR: [{ partner: false }, { partner: null }] },
+            _sum: { clean: true },
+          }),
+          // Оборот Партнер = сумма чистыми только по статусу "Готово" где partner = true
+          this.prisma.order.aggregate({
+            where: { ...cityWhere, statusOrder: 'Готово', clean: { not: null }, partner: true },
             _sum: { clean: true },
           }),
           // Прибыль = сумма сдача мастера только по статусу "Готово"
@@ -355,7 +367,9 @@ export class ReportsService {
         const totalAmount = income - expense;
 
         // Расчёты
-        const turnover = totalClean._sum.clean ? Number(totalClean._sum.clean) : 0; // Оборот = сумма чистыми
+        const turnover = totalClean._sum.clean ? Number(totalClean._sum.clean) : 0; // Оборот = сумма чистыми (ВСЕ)
+        const turnoverOur = totalCleanOur._sum.clean ? Number(totalCleanOur._sum.clean) : 0; // Оборот Наш
+        const turnoverPartner = totalCleanPartner._sum.clean ? Number(totalCleanPartner._sum.clean) : 0; // Оборот Партнер
         const profit = totalMasterChange._sum.masterChange ? Number(totalMasterChange._sum.masterChange) : 0; // Прибыль = сумма сдача мастера
         const maxCheckValue = maxCheck._max.clean ? Number(maxCheck._max.clean) : 0; // Макс чек (по clean)
         
@@ -372,7 +386,9 @@ export class ReportsService {
             closedOrders: completedOrders,       // Для обратной совместимости (Готово + Отказ)
             refusals: 0,        // Убрали отдельный подсчёт
             notOrders,
-            totalClean: turnover, // Для обратной совместимости
+            totalClean: turnover, // Для обратной совместимости (ВСЕ)
+            totalCleanOur: turnoverOur, // Оборот Наш (partner = false)
+            totalCleanPartner: turnoverPartner, // Оборот Партнер (partner = true)
             totalMasterChange: profit, // Для обратной совместимости
             avgCheck,           // Для обратной совместимости
           },
