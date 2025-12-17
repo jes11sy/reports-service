@@ -59,11 +59,17 @@ model Order {
   @@index([operatorNameId])
   @@index([createDate])
   @@index([avitoName])
-  // Новые оптимизированные индексы для производительности
+  // Оптимизированные индексы для производительности (базовые)
   @@index([operatorNameId, createDate])
   @@index([city, createDate, statusOrder])
   @@index([rk, createDate])
   @@index([statusOrder, closingData])
+  // ✅ Новые индексы для аналитики (декабрь 2025)
+  @@index([city, statusOrder, partner])
+  @@index([statusOrder, clean])
+  @@index([masterId, city])
+  @@index([rk, avitoName, statusOrder])
+  @@index([city, statusOrder, closingData])
   @@map("orders")
 }
 
