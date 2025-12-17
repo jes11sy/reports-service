@@ -34,14 +34,14 @@ import { StatsModule } from './stats/stats.module';
           
           console.log(`✅ Redis cache connected: ${redisHost}:${redisPort}`);
           return { 
-            store,
-            ttl: 60 * 1000, // 1 минута по умолчанию
+            store: store as any,
+            ttl: 60000,
           };
-        } catch (error) {
+        } catch (error: any) {
           console.warn('⚠️ Redis unavailable, using in-memory cache', error.message);
           return {
-            ttl: 60 * 1000, // 1 минута
-            max: 100, // максимум 100 записей в памяти
+            ttl: 60000,
+            max: 100,
           };
         }
       },
