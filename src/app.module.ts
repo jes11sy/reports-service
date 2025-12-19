@@ -9,12 +9,14 @@ import { AuthModule } from './auth/auth.module';
 import { ReportsModule } from './reports/reports.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { StatsModule } from './stats/stats.module';
+import { RedisModule } from './redis/redis.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+    RedisModule,
     // ✅ Redis кеширование для аналитики
     CacheModule.registerAsync<RedisClientOptions>({
       isGlobal: true,
