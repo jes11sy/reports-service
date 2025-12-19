@@ -16,15 +16,9 @@ export class CookieJwtAuthGuard extends JwtAuthGuard {
     const request = context.switchToHttp().getRequest();
     const rawRequest = request.raw as any;
     
-    // Пытаемся найти cookies в разных местах
-    const cookies = rawRequest.cookies || (request as any).cookies || null;
-    const unsignCookie = rawRequest.unsignCookie || (request as any).unsignCookie || null;
-    
-    console.log('🔍 DEBUG: rawRequest.cookies =', !!rawRequest.cookies);
-    console.log('🔍 DEBUG: request.cookies =', !!(request as any).cookies);
-    console.log('🔍 DEBUG: Found cookies =', !!cookies);
-    console.log('🔍 DEBUG: Cookie keys =', cookies ? Object.keys(cookies) : 'NONE');
-    console.log('🔍 DEBUG: Has unsignCookie =', !!unsignCookie);
+    // ✅ ВАЖНО: В NestJS + Fastify cookies находятся в request.cookies, а НЕ rawRequest.cookies
+    const cookies = (request as any).cookies || rawRequest.cookies || null;
+    const unsignCookie = (request as any).unsignCookie || rawRequest.unsignCookie || null;
     
     // ✅ Читаем cookies из найденного источника
     let cookieToken = null;
@@ -32,11 +26,9 @@ export class CookieJwtAuthGuard extends JwtAuthGuard {
     if (cookies && CookieConfig.ENABLE_COOKIE_SIGNING && unsignCookie) {
       // Пытаемся получить подписанный cookie (защита от tampering)
       const signedCookie = cookies[CookieConfig.ACCESS_TOKEN_NAME];
-      console.log('🔍 Signed cookie:', signedCookie ? 'exists' : 'not found');
       
       if (signedCookie) {
         const unsigned = unsignCookie(signedCookie);
-        console.log('🔍 Unsigned result:', { valid: unsigned?.valid, hasValue: !!unsigned?.value });
         cookieToken = unsigned?.valid ? unsigned.value : null;
         
         // Если подпись не валидна
@@ -47,17 +39,12 @@ export class CookieJwtAuthGuard extends JwtAuthGuard {
     } else if (cookies) {
       // Fallback на обычные cookies если signing отключен
       cookieToken = cookies[CookieConfig.ACCESS_TOKEN_NAME];
-      console.log('🔍 Cookie without signing:', cookieToken ? 'found' : 'not found');
     }
-    
-    console.log('🔍 Cookie token:', cookieToken ? 'extracted' : 'not found');
-    console.log('🔍 Has Authorization header:', !!request.headers.authorization);
     
     // Если токен в cookie есть и нет Authorization header - используем cookie
     if (cookieToken && !request.headers.authorization) {
       // Добавляем токен из cookie в заголовок для JWT strategy
       request.headers.authorization = `Bearer ${cookieToken}`;
-      console.log('✅ Token added to Authorization header');
     }
     
     // Вызываем родительский guard для валидации токена
