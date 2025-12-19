@@ -16,13 +16,15 @@ export class CookieJwtAuthGuard extends JwtAuthGuard {
     const request = context.switchToHttp().getRequest();
     const rawRequest = request.raw as any; // Cast для доступа к Fastify-specific properties
     
-    console.log('🔍 CookieJwtAuthGuard DEBUG:', {
-      hasCookies: !!rawRequest.cookies,
-      cookieKeys: rawRequest.cookies ? Object.keys(rawRequest.cookies) : [],
-      hasUnsignCookie: !!rawRequest.unsignCookie,
-      accessTokenName: CookieConfig.ACCESS_TOKEN_NAME,
-      enableSigning: CookieConfig.ENABLE_COOKIE_SIGNING,
-    });
+    console.log('🔍 DEBUG: hasCookies =', !!rawRequest.cookies);
+    console.log('🔍 DEBUG: cookieKeys =', rawRequest.cookies ? Object.keys(rawRequest.cookies) : 'NO_COOKIES');
+    console.log('🔍 DEBUG: hasUnsignCookie =', !!rawRequest.unsignCookie);
+    console.log('🔍 DEBUG: accessTokenName =', CookieConfig.ACCESS_TOKEN_NAME);
+    console.log('🔍 DEBUG: enableSigning =', CookieConfig.ENABLE_COOKIE_SIGNING);
+    
+    if (rawRequest.cookies) {
+      console.log('🔍 DEBUG: All cookies:', JSON.stringify(rawRequest.cookies));
+    }
     
     // ✅ В NestJS + Fastify cookies доступны через request.raw
     // после регистрации @fastify/cookie plugin
