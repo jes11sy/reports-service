@@ -16,6 +16,14 @@ export class CookieJwtAuthGuard extends JwtAuthGuard {
     const request = context.switchToHttp().getRequest();
     const rawRequest = request.raw as any; // Cast для доступа к Fastify-specific properties
     
+    console.log('🔍 CookieJwtAuthGuard DEBUG:', {
+      hasCookies: !!rawRequest.cookies,
+      cookieKeys: rawRequest.cookies ? Object.keys(rawRequest.cookies) : [],
+      hasUnsignCookie: !!rawRequest.unsignCookie,
+      accessTokenName: CookieConfig.ACCESS_TOKEN_NAME,
+      enableSigning: CookieConfig.ENABLE_COOKIE_SIGNING,
+    });
+    
     // ✅ В NestJS + Fastify cookies доступны через request.raw
     // после регистрации @fastify/cookie plugin
     let cookieToken = null;
@@ -23,8 +31,11 @@ export class CookieJwtAuthGuard extends JwtAuthGuard {
     if (CookieConfig.ENABLE_COOKIE_SIGNING) {
       // Пытаемся получить подписанный cookie (защита от tampering)
       const signedCookie = rawRequest.cookies?.[CookieConfig.ACCESS_TOKEN_NAME];
+      console.log('🔍 Signed cookie:', signedCookie ? 'exists' : 'not found');
+      
       if (signedCookie && rawRequest.unsignCookie) {
         const unsigned = rawRequest.unsignCookie(signedCookie);
+        console.log('🔍 Unsigned result:', { valid: unsigned?.valid, hasValue: !!unsigned?.value });
         cookieToken = unsigned?.valid ? unsigned.value : null;
         
         // Если подпись не валидна
@@ -38,10 +49,14 @@ export class CookieJwtAuthGuard extends JwtAuthGuard {
       cookieToken = rawRequest.cookies?.[CookieConfig.ACCESS_TOKEN_NAME];
     }
     
+    console.log('🔍 Cookie token:', cookieToken ? 'extracted' : 'not found');
+    console.log('🔍 Has Authorization header:', !!request.headers.authorization);
+    
     // Если токен в cookie есть и нет Authorization header - используем cookie
     if (cookieToken && !request.headers.authorization) {
       // Добавляем токен из cookie в заголовок для JWT strategy
       request.headers.authorization = `Bearer ${cookieToken}`;
+      console.log('✅ Token added to Authorization header');
     }
     
     // Вызываем родительский guard для валидации токена
