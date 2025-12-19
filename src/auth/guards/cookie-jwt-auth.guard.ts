@@ -14,41 +14,40 @@ import { CookieConfig } from '../../config/cookie.config';
 export class CookieJwtAuthGuard extends JwtAuthGuard {
   canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest();
-    const rawRequest = request.raw as any; // Cast для доступа к Fastify-specific properties
+    const rawRequest = request.raw as any;
     
-    console.log('🔍 DEBUG: hasCookies =', !!rawRequest.cookies);
-    console.log('🔍 DEBUG: cookieKeys =', rawRequest.cookies ? Object.keys(rawRequest.cookies) : 'NO_COOKIES');
-    console.log('🔍 DEBUG: hasUnsignCookie =', !!rawRequest.unsignCookie);
-    console.log('🔍 DEBUG: accessTokenName =', CookieConfig.ACCESS_TOKEN_NAME);
-    console.log('🔍 DEBUG: enableSigning =', CookieConfig.ENABLE_COOKIE_SIGNING);
+    // Пытаемся найти cookies в разных местах
+    const cookies = rawRequest.cookies || (request as any).cookies || null;
+    const unsignCookie = rawRequest.unsignCookie || (request as any).unsignCookie || null;
     
-    if (rawRequest.cookies) {
-      console.log('🔍 DEBUG: All cookies:', JSON.stringify(rawRequest.cookies));
-    }
+    console.log('🔍 DEBUG: rawRequest.cookies =', !!rawRequest.cookies);
+    console.log('🔍 DEBUG: request.cookies =', !!(request as any).cookies);
+    console.log('🔍 DEBUG: Found cookies =', !!cookies);
+    console.log('🔍 DEBUG: Cookie keys =', cookies ? Object.keys(cookies) : 'NONE');
+    console.log('🔍 DEBUG: Has unsignCookie =', !!unsignCookie);
     
-    // ✅ В NestJS + Fastify cookies доступны через request.raw
-    // после регистрации @fastify/cookie plugin
+    // ✅ Читаем cookies из найденного источника
     let cookieToken = null;
     
-    if (CookieConfig.ENABLE_COOKIE_SIGNING) {
+    if (cookies && CookieConfig.ENABLE_COOKIE_SIGNING && unsignCookie) {
       // Пытаемся получить подписанный cookie (защита от tampering)
-      const signedCookie = rawRequest.cookies?.[CookieConfig.ACCESS_TOKEN_NAME];
+      const signedCookie = cookies[CookieConfig.ACCESS_TOKEN_NAME];
       console.log('🔍 Signed cookie:', signedCookie ? 'exists' : 'not found');
       
-      if (signedCookie && rawRequest.unsignCookie) {
-        const unsigned = rawRequest.unsignCookie(signedCookie);
+      if (signedCookie) {
+        const unsigned = unsignCookie(signedCookie);
         console.log('🔍 Unsigned result:', { valid: unsigned?.valid, hasValue: !!unsigned?.value });
         cookieToken = unsigned?.valid ? unsigned.value : null;
         
         // Если подпись не валидна
         if (unsigned && !unsigned.valid) {
-          // Cookie существует, но подпись невалидна - возможная атака
           throw new UnauthorizedException('Invalid cookie signature detected. Possible tampering attempt.');
         }
       }
-    } else {
+    } else if (cookies) {
       // Fallback на обычные cookies если signing отключен
-      cookieToken = rawRequest.cookies?.[CookieConfig.ACCESS_TOKEN_NAME];
+      cookieToken = cookies[CookieConfig.ACCESS_TOKEN_NAME];
+      console.log('🔍 Cookie without signing:', cookieToken ? 'found' : 'not found');
     }
     
     console.log('🔍 Cookie token:', cookieToken ? 'extracted' : 'not found');
