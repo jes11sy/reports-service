@@ -1,8 +1,8 @@
 import { Controller, Get, Query, UseGuards, HttpCode, HttpStatus, Request, Param } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
-import { AuthGuard } from '@nestjs/passport';
 import { StatsService } from './stats.service';
 import { RolesGuard, Roles, UserRole } from '../auth/roles.guard';
+import { CookieJwtAuthGuard } from '../auth/guards/cookie-jwt-auth.guard';
 
 @ApiTags('stats')
 @Controller('stats')
@@ -22,7 +22,7 @@ export class StatsController {
 
   // Личная статистика оператора
   @Get('my')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.CALLCENTRE_OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -40,7 +40,7 @@ export class StatsController {
 
   // Статистика конкретного оператора (для админов)
   @Get('operator/:operatorId')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
@@ -57,7 +57,7 @@ export class StatsController {
 
   // Общая статистика (для админов)
   @Get('overall')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
@@ -73,7 +73,7 @@ export class StatsController {
 
   // Статистика для главного дашборда админки
   @Get('dashboard')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
