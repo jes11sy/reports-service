@@ -1,6 +1,6 @@
 import { Controller, Get, Query, UseGuards, HttpCode, HttpStatus, Response, Param, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { AuthGuard } from '@nestjs/passport';
+import { CookieJwtAuthGuard } from '../auth/guards/cookie-jwt-auth.guard';
 import { ReportsService } from './reports.service';
 import { RolesGuard, Roles, UserRole } from '../auth/roles.guard';
 import { CampaignsReportQueryDto } from './dto/reports-query.dto';
@@ -22,7 +22,7 @@ export class ReportsController {
   }
 
   @Get('orders')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @ApiOperation({ summary: 'Get orders statistics' })
@@ -31,7 +31,7 @@ export class ReportsController {
   }
 
   @Get('masters')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @ApiOperation({ summary: 'Get masters report' })
@@ -40,7 +40,7 @@ export class ReportsController {
   }
 
   @Get('finance')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR)
   @ApiOperation({ summary: 'Get finance report' })
@@ -49,7 +49,7 @@ export class ReportsController {
   }
 
   @Get('calls')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @ApiOperation({ summary: 'Get calls statistics' })
@@ -58,7 +58,7 @@ export class ReportsController {
   }
 
   @Get('city')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @ApiOperation({ summary: 'Get city report' })
@@ -68,7 +68,7 @@ export class ReportsController {
   }
 
   @Get('city/:city')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @ApiOperation({ summary: 'Get detailed city report' })
@@ -77,7 +77,7 @@ export class ReportsController {
   }
 
   @Get('campaigns')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @ApiOperation({ summary: 'Get campaigns report by cities' })
@@ -86,7 +86,7 @@ export class ReportsController {
   }
 
   @Get('export/excel')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR)
   @ApiOperation({ summary: 'Export report to Excel' })
@@ -99,7 +99,7 @@ export class ReportsController {
   }
 
   @Get('statistics/master')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.MASTER)
   @ApiOperation({ summary: 'Get master statistics by cities' })

@@ -1,6 +1,6 @@
 import { Controller, Get, Query, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { AuthGuard } from '@nestjs/passport';
+import { CookieJwtAuthGuard } from '../auth/guards/cookie-jwt-auth.guard';
 import { AnalyticsService } from './analytics.service';
 import { RolesGuard, Roles, UserRole } from '../auth/roles.guard';
 import { AnalyticsQueryDto, DashboardQueryDto } from './dto/analytics-query.dto';
@@ -11,7 +11,7 @@ export class AnalyticsController {
   constructor(private analyticsService: AnalyticsService) {}
 
   @Get('operators')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
@@ -25,7 +25,7 @@ export class AnalyticsController {
   }
 
   @Get('cities')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
@@ -35,7 +35,7 @@ export class AnalyticsController {
   }
 
   @Get('campaigns')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
@@ -45,7 +45,7 @@ export class AnalyticsController {
   }
 
   @Get('daily')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
@@ -55,7 +55,7 @@ export class AnalyticsController {
   }
 
   @Get('dashboard')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN, UserRole.CALLCENTRE_OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -65,7 +65,7 @@ export class AnalyticsController {
   }
 
   @Get('performance')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR)
   @HttpCode(HttpStatus.OK)
