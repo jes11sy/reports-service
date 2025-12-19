@@ -45,7 +45,12 @@ async function bootstrap() {
     origin: corsOrigin.length > 0 ? corsOrigin : false,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Use-Cookies'],
+  });
+
+  // ✅ Cookie Plugin для httpOnly cookies
+  await app.register(require('@fastify/cookie'), {
+    secret: process.env.COOKIE_SECRET || process.env.JWT_SECRET, // Для подписи cookies
   });
 
   // Helmet с правильной CSP
