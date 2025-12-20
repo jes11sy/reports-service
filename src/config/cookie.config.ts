@@ -25,7 +25,8 @@ export const CookieConfig = {
   USE_COOKIES_HEADER: 'x-use-cookies',
   
   // Security flags
-  ENABLE_COOKIE_SIGNING: true,                // Подпись cookies для защиты от tampering
+  // ⚠️ ОТКЛЮЧЕНО: JWT уже подписан, дополнительная подпись cookie избыточна
+  ENABLE_COOKIE_SIGNING: false,
 } as const;
 
 /**
