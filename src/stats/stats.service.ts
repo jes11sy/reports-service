@@ -329,13 +329,41 @@ export class StatsService {
       })
     ]);
 
+    // Фильтр по дате создания для текущего месяца
+    const dateFilter = {
+      gte: startOfMonth,
+      lte: endOfMonth
+    };
+
     // Получаем количество заказов за текущий месяц
     const orders = await this.prisma.order.count({
       where: {
-        createDate: {
-          gte: startOfMonth,
-          lte: endOfMonth
-        }
+        createDate: dateFilter
+      }
+    });
+
+    // Незаказы - статус "Незаказ"
+    const notOrders = await this.prisma.order.count({
+      where: {
+        createDate: dateFilter,
+        statusOrder: 'Незаказ'
+      }
+    });
+
+    // Отмены - статус "Отказ"
+    const cancellations = await this.prisma.order.count({
+      where: {
+        createDate: dateFilter,
+        statusOrder: 'Отказ'
+      }
+    });
+
+    // Выполненных в деньги - статус "Готово" или "Отказ" с result > 0
+    const completedInMoney = await this.prisma.order.count({
+      where: {
+        createDate: dateFilter,
+        statusOrder: { in: ['Готово', 'Отказ'] },
+        result: { gt: 0 }
       }
     });
 
@@ -390,6 +418,9 @@ export class StatsService {
         masters: masters
       },
       orders: orders,
+      notOrders: notOrders,           // Незаказы
+      cancellations: cancellations,   // Отмены (Отказ)
+      completedInMoney: completedInMoney, // Выполненных в деньги
       finance: {
         revenue: Math.round(revenue),
         profit: Math.round(profit),
