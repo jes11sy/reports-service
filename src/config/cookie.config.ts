@@ -50,3 +50,31 @@ export function shouldUseCookies(headers: Record<string, any>): boolean {
   return useCookiesHeader === 'true';
 }
 
+/**
+ * Получает уникальное имя cookie на основе origin для изоляции между фронтендами
+ */
+export function getCookieName(baseName: string, origin?: string): string {
+  if (!origin) {
+    return baseName;
+  }
+  
+  try {
+    const url = new URL(origin);
+    const hostname = url.hostname;
+    
+    if (hostname === 'lead-schem.ru') {
+      return `${baseName}_masters`;
+    }
+    
+    const parts = hostname.split('.');
+    if (parts.length >= 2) {
+      const subdomain = parts[0];
+      return `${baseName}_${subdomain}`;
+    }
+  } catch (err) {
+    // Если ошибка парсинга, используем базовое имя
+  }
+  
+  return baseName;
+}
+

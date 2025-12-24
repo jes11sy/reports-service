@@ -1,6 +1,6 @@
 import { Injectable, ExecutionContext, UnauthorizedException, Inject } from '@nestjs/common';
 import { JwtAuthGuard } from './jwt-auth.guard';
-import { CookieConfig } from '../../config/cookie.config';
+import { CookieConfig, getCookieName } from '../../config/cookie.config';
 import { RedisService } from '../../redis/redis.service';
 
 /**
@@ -28,12 +28,21 @@ export class CookieJwtAuthGuard extends JwtAuthGuard {
     const cookies = (request as any).cookies || rawRequest.cookies || null;
     const unsignCookie = (request as any).unsignCookie || rawRequest.unsignCookie || null;
     
+    // Определяем имя cookie на основе origin
+    const origin = request.headers.origin || request.headers.referer;
+    const accessTokenName = getCookieName(CookieConfig.ACCESS_TOKEN_NAME, origin);
+    
     // ✅ Читаем cookies из найденного источника
     let cookieToken = null;
     
     if (cookies && CookieConfig.ENABLE_COOKIE_SIGNING && unsignCookie) {
-      // Пытаемся получить подписанный cookie (защита от tampering)
-      const signedCookie = cookies[CookieConfig.ACCESS_TOKEN_NAME];
+      // Пытаемся получить подписанный cookie (защита от tampering) с динамическим именем
+      let signedCookie = cookies[accessTokenName];
+      
+      // Fallback на базовое имя
+      if (!signedCookie) {
+        signedCookie = cookies[CookieConfig.ACCESS_TOKEN_NAME];
+      }
       
       if (signedCookie) {
         const unsigned = unsignCookie(signedCookie);
@@ -45,8 +54,13 @@ export class CookieJwtAuthGuard extends JwtAuthGuard {
         }
       }
     } else if (cookies) {
-      // Fallback на обычные cookies если signing отключен
-      cookieToken = cookies[CookieConfig.ACCESS_TOKEN_NAME];
+      // Fallback на обычные cookies если signing отключен с динамическим именем
+      cookieToken = cookies[accessTokenName];
+      
+      // Fallback на базовое имя
+      if (!cookieToken) {
+        cookieToken = cookies[CookieConfig.ACCESS_TOKEN_NAME];
+      }
     }
     
     // Если токен в cookie есть и нет Authorization header - используем cookie
