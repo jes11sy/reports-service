@@ -328,6 +328,7 @@ export class ReportsService {
         city,
         status_order,
         partner,
+        result,
         COUNT(*) as count,
         COALESCE(SUM(clean), 0) as sum_clean,
         COALESCE(SUM(master_change), 0) as sum_master_change,
@@ -335,7 +336,7 @@ export class ReportsService {
       FROM orders
       WHERE city = ANY($1::text[])
         ${dateCondition}
-      GROUP BY city, status_order, partner
+      GROUP BY city, status_order, partner, result
     `;
 
     const orderStats = await this.prisma.$queryRawUnsafe<Array<{
@@ -346,6 +347,7 @@ export class ReportsService {
       sum_master_change: number;
       max_clean: number;
       partner: boolean;
+      result: number;
     }>>(orderStatsQuery, cityList);
 
     // 2. Подсчёт специальных категорий (микрочек, 10к+) (1 запрос)
@@ -412,7 +414,8 @@ export class ReportsService {
         .filter(o => ['Готово', 'Отказ', 'Незаказ'].includes(o.status_order))
         .reduce((sum, o) => sum + Number(o.count), 0);
       
-      const completedOrders = cityOrders
+      // Всего закрытых (Готово + Отказ) - для расчета avgCheck и completedPercent
+      const totalClosed = cityOrders
         .filter(o => ['Готово', 'Отказ'].includes(o.status_order))
         .reduce((sum, o) => sum + Number(o.count), 0);
       
@@ -421,11 +424,12 @@ export class ReportsService {
         .reduce((sum, o) => sum + Number(o.count), 0);
 
       const zeroOrders = cityOrders
-        .filter(o => ['Готово', 'Отказ'].includes(o.status_order) && o.sum_clean === 0)
+        .filter(o => ['Готово', 'Отказ'].includes(o.status_order) && (o.result === 0 || o.result === null))
         .reduce((sum, o) => sum + Number(o.count), 0);
 
-      const completedWithMoney = cityOrders
-        .filter(o => o.status_order === 'Готово' && o.sum_clean > 0)
+      // Выполненных в деньги = Готово или Отказ с result > 0
+      const completedOrders = cityOrders
+        .filter(o => ['Готово', 'Отказ'].includes(o.status_order) && o.result > 0)
         .reduce((sum, o) => sum + Number(o.count), 0);
 
       // Суммы
@@ -462,13 +466,13 @@ export class ReportsService {
       const totalAmount = income - expense;
 
       // Расчёты
-      const avgCheck = completedOrders > 0 ? turnover / completedOrders : 0;
-      const completedPercent = completedOrders > 0 ? (completedWithMoney / completedOrders) * 100 : 0;
+      const avgCheck = totalClosed > 0 ? turnover / totalClosed : 0;
+      const completedPercent = totalClosed > 0 ? (completedOrders / totalClosed) * 100 : 0;
 
       return {
         city: cityName,
         orders: {
-          closedOrders: completedOrders,
+          closedOrders: totalClosed,
           refusals: 0,
           notOrders,
           totalClean: turnover,

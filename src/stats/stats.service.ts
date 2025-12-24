@@ -356,25 +356,19 @@ export class StatsService {
 
     const revenue = revenueSum._sum.clean ? Number(revenueSum._sum.clean) : 0;
 
-    // Прибыль и расходы за текущий месяц
+    // Прибыль и расходы из таблицы Cash за текущий месяц
     const [incomeSum, expenseSum] = await Promise.all([
       this.prisma.cash.aggregate({
         where: {
           name: 'приход',
-          date: {
-            gte: startOfMonth,
-            lte: endOfMonth
-          }
+          dateCreate: dateFilter,
         },
         _sum: { amount: true }
       }),
       this.prisma.cash.aggregate({
         where: {
           name: 'расход',
-          date: {
-            gte: startOfMonth,
-            lte: endOfMonth
-          }
+          dateCreate: dateFilter,
         },
         _sum: { amount: true }
       })
