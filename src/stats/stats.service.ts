@@ -361,14 +361,20 @@ export class StatsService {
       this.prisma.cash.aggregate({
         where: {
           name: 'приход',
-          dateCreate: dateFilter,
+          dateCreate: {
+            gte: startOfMonth,
+            lte: endOfMonth
+          }
         },
         _sum: { amount: true }
       }),
       this.prisma.cash.aggregate({
         where: {
           name: 'расход',
-          dateCreate: dateFilter,
+          dateCreate: {
+            gte: startOfMonth,
+            lte: endOfMonth
+          }
         },
         _sum: { amount: true }
       })
