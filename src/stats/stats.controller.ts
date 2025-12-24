@@ -79,7 +79,11 @@ export class StatsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Получить статистику для дашборда админки' })
   async getDashboardStats() {
-    return this.statsService.getDashboardStats();
+    const stats = await this.statsService.getDashboardStats();
+    return {
+      success: true,
+      data: stats
+    };
   }
 }
 
