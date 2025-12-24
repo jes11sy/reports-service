@@ -310,9 +310,15 @@ export class StatsService {
 
   /**
    * Получить статистику для главного дашборда админки
+   * Данные показываются только за текущий месяц
    */
   async getDashboardStats() {
-    // Получаем количество сотрудников по типам
+    // Определяем границы текущего месяца
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    // Получаем количество сотрудников по типам (не зависит от периода)
     const [callCenterEmployees, directors, masters] = await Promise.all([
       this.prisma.callcentreOperator.count({
         where: { status: 'active' } // У операторов - status, а не statusWork!
@@ -323,14 +329,25 @@ export class StatsService {
       })
     ]);
 
-    // Получаем количество заказов
-    const orders = await this.prisma.order.count();
+    // Получаем количество заказов за текущий месяц
+    const orders = await this.prisma.order.count({
+      where: {
+        createDate: {
+          gte: startOfMonth,
+          lte: endOfMonth
+        }
+      }
+    });
 
-    // Оборот - сумма "чистыми" (clean) по всем закрытым заказам
+    // Оборот - сумма "чистыми" (clean) по закрытым заказам за текущий месяц
     const revenueSum = await this.prisma.order.aggregate({
       where: {
         statusOrder: 'Готово',
-        clean: { not: null }
+        clean: { not: null },
+        closingData: {
+          gte: startOfMonth,
+          lte: endOfMonth
+        }
       },
       _sum: {
         clean: true
@@ -339,39 +356,32 @@ export class StatsService {
 
     const revenue = revenueSum._sum.clean ? Number(revenueSum._sum.clean) : 0;
 
-    // Прибыль - сумма приходов из таблицы Cash (если есть данные, иначе 0)
+    // Прибыль и расходы за текущий месяц
     const [incomeSum, expenseSum] = await Promise.all([
       this.prisma.cash.aggregate({
-        where: { name: 'приход' },
+        where: {
+          name: 'приход',
+          date: {
+            gte: startOfMonth,
+            lte: endOfMonth
+          }
+        },
         _sum: { amount: true }
       }),
       this.prisma.cash.aggregate({
-        where: { name: 'расход' },
+        where: {
+          name: 'расход',
+          date: {
+            gte: startOfMonth,
+            lte: endOfMonth
+          }
+        },
         _sum: { amount: true }
       })
     ]);
 
     const profit = incomeSum._sum.amount ? Number(incomeSum._sum.amount) : 0;
     const expenses = expenseSum._sum.amount ? Number(expenseSum._sum.amount) : 0;
-
-    // Цена заказа Авито - расходы с paymentPurpose "Авито" / кол-во заказов с РК "Авито"
-    const [avitoExpenses, avitoOrdersCount] = await Promise.all([
-      this.prisma.cash.aggregate({
-        where: {
-          name: 'расход',
-          paymentPurpose: 'Авито'
-        },
-        _sum: { amount: true }
-      }),
-      this.prisma.order.count({
-        where: { rk: 'Авито' }
-      })
-    ]);
-
-    let avitoOrderPrice = 0;
-    if (avitoOrdersCount > 0 && avitoExpenses._sum.amount) {
-      avitoOrderPrice = Math.round(Number(avitoExpenses._sum.amount) / avitoOrdersCount);
-    }
 
     const response = {
       employees: {
@@ -384,13 +394,11 @@ export class StatsService {
         revenue: Math.round(revenue),
         profit: Math.round(profit),
         expenses: Math.round(expenses)
-      },
-      avito: {
-        orderPrice: avitoOrderPrice
       }
     };
 
-    this.logger.log('Статистика дашборда получена', {
+    this.logger.log('Статистика дашборда получена за текущий месяц', {
+      period: `${startOfMonth.toISOString()} - ${endOfMonth.toISOString()}`,
       employees: response.employees,
       orders: response.orders,
       finance: response.finance
