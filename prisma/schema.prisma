@@ -195,6 +195,30 @@ model Call {
   @@map("calls")
 }
 
+// Логи ошибок (shared with auth-service)
+model ErrorLog {
+  id             Int      @id @default(autoincrement())
+  timestamp      DateTime @default(now())
+  service        String   @db.VarChar(100)
+  errorType      String   @db.VarChar(255)
+  errorMessage   String   @db.Text
+  stackTrace     String?  @db.Text
+  userId         Int?
+  userRole       String?  @db.VarChar(50)
+  requestUrl     String?  @db.VarChar(500)
+  requestMethod  String?  @db.VarChar(10)
+  ip             String?  @db.VarChar(45)
+  userAgent      String?  @db.Text
+  metadata       Json?    @db.JsonB
+
+  @@index([timestamp(sort: Desc)])
+  @@index([service, timestamp(sort: Desc)])
+  @@index([errorType])
+  @@index([userId])
+  @@map("error_logs")
+}
+
+
 
 
 
