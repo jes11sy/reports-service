@@ -423,13 +423,14 @@ export class ReportsService {
         .filter(o => o.status_order === 'Незаказ')
         .reduce((sum, o) => sum + Number(o.count), 0);
 
+      // Ноль = количество отказов (все заказы со статусом "Отказ")
       const zeroOrders = cityOrders
-        .filter(o => ['Готово', 'Отказ'].includes(o.status_order) && (o.result === 0 || o.result === null))
+        .filter(o => o.status_order === 'Отказ')
         .reduce((sum, o) => sum + Number(o.count), 0);
 
-      // Выполненных в деньги = Готово или Отказ с result > 0
+      // Выполненных в деньги = Готово где result > 0
       const completedOrders = cityOrders
-        .filter(o => ['Готово', 'Отказ'].includes(o.status_order) && o.result > 0)
+        .filter(o => o.status_order === 'Готово' && o.result > 0)
         .reduce((sum, o) => sum + Number(o.count), 0);
 
       // Суммы
