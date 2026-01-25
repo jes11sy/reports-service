@@ -9,6 +9,11 @@ export class ReportsService {
   async getOrdersReport(query: any) {
     const { startDate, endDate, city, status, masterId } = query;
 
+    // 🔧 FIX: Прогрев соединения перед тяжелыми запросами
+    await this.prisma.executeWithRetry(async () => {
+      await this.prisma.$queryRaw`SELECT 1`;
+    });
+
     const where: any = {};
 
     if (startDate || endDate) {
@@ -60,6 +65,11 @@ export class ReportsService {
   async getMastersReport(query: any, user?: any) {
     const startTime = Date.now();
     const { startDate, endDate, masterId } = query;
+
+    // 🔧 FIX: Прогрев соединения перед тяжелыми запросами
+    await this.prisma.executeWithRetry(async () => {
+      await this.prisma.$queryRaw`SELECT 1`;
+    });
 
     const orderWhere: any = {};
     if (startDate || endDate) {
@@ -466,6 +476,12 @@ export class ReportsService {
     const startTime = Date.now();
     console.log('=== getCityReport START (OPTIMIZED) ===');
     const { startDate, endDate, city } = query;
+
+    // 🔧 FIX: Прогрев соединения перед тяжелыми запросами
+    // Это предотвращает 502 ошибки при stale connections
+    await this.prisma.executeWithRetry(async () => {
+      await this.prisma.$queryRaw`SELECT 1`;
+    });
 
     const orderWhere: any = {};
     if (startDate || endDate) {
