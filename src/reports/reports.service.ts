@@ -231,10 +231,10 @@ export class ReportsService {
     }
     
     // Фильтр по назначениям платежа (если передан массив)
-    if (purposes && purposes.length > 0) {
-      const purposeArray = Array.isArray(purposes) ? purposes : purposes.split(',');
-      where.paymentPurpose = { in: purposeArray };
-    }
+    // Примечание: фильтрация происходит после группировки, т.к. "Заказ №1111" -> "Заказ"
+    const purposeFilter = purposes 
+      ? (Array.isArray(purposes) ? purposes : purposes.split(','))
+      : null;
 
     // Группируем по городу, назначению и типу операции
     const cashStats = await this.prisma.cash.groupBy({
@@ -244,6 +244,22 @@ export class ReportsService {
       _count: { id: true },
     });
 
+    /**
+     * Нормализация назначения платежа
+     * "Заказ №1111" -> "Заказ"
+     * "Заказ №2222" -> "Заказ"
+     */
+    const normalizePurpose = (rawPurpose: string | null): string => {
+      if (!rawPurpose) return 'Без назначения';
+      
+      // Если начинается с "Заказ" (например "Заказ №1111") - объединяем в "Заказ"
+      if (rawPurpose.toLowerCase().startsWith('заказ')) {
+        return 'Заказ';
+      }
+      
+      return rawPurpose;
+    };
+
     // Собираем данные по городам
     const citiesMap = new Map<string, Map<string, { income: number; expense: number }>>();
     let grandTotalIncome = 0;
@@ -251,8 +267,13 @@ export class ReportsService {
 
     cashStats.forEach(stat => {
       const cityName = stat.city || 'Не указан';
-      const purpose = stat.paymentPurpose || 'Без назначения';
+      const purpose = normalizePurpose(stat.paymentPurpose);
       const amount = Number(stat._sum.amount || 0);
+
+      // Фильтр по нормализованным назначениям (после объединения "Заказ №..." в "Заказ")
+      if (purposeFilter && purposeFilter.length > 0 && !purposeFilter.includes(purpose)) {
+        return;
+      }
 
       if (!citiesMap.has(cityName)) {
         citiesMap.set(cityName, new Map());
