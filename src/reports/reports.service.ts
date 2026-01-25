@@ -589,20 +589,8 @@ export class ReportsService {
       modern_count: bigint;
     }>>(modernStatsQuery, cityList);
 
-    // 4. Кассовая статистика по городам (1 запрос) - с фильтром по датам
-    let cashDateCondition = '';
-    if (startDate || endDate) {
-      if (startDate) {
-        cashDateCondition += ` AND date_create >= '${new Date(startDate).toISOString()}'`;
-      }
-      if (endDate) {
-        // Добавляем конец дня (23:59:59.999) чтобы включить весь день
-        const cashEndDate = new Date(endDate);
-        cashEndDate.setHours(23, 59, 59, 999);
-        cashDateCondition += ` AND date_create <= '${cashEndDate.toISOString()}'`;
-      }
-    }
-
+    // 4. Кассовая статистика по городам (1 запрос) - БЕЗ фильтра по датам
+    // Касса всегда показывает текущий баланс за всё время
     const cashStatsQuery = `
       SELECT 
         city,
@@ -610,7 +598,6 @@ export class ReportsService {
         COALESCE(SUM(amount), 0) as total_amount
       FROM cash
       WHERE city = ANY($1::text[])
-        ${cashDateCondition}
       GROUP BY city, name
     `;
 
