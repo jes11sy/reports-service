@@ -710,9 +710,12 @@ export class ReportsService {
           zeroOrders,
           completedOrders,
           completedPercent,
+          // Новые детальные поля для админ-отчёта
           microUnder1500,
           micro1500to10000,
           over10kCount,
+          // Обратная совместимость для директорского фронта
+          microCheckCount: microUnder1500 + micro1500to10000, // все чеки до 10к
           avgCheck,
           maxCheck: maxCheckValue,
           masterHandover: modernOrders,
