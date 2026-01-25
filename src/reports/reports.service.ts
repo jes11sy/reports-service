@@ -199,6 +199,128 @@ export class ReportsService {
     };
   }
 
+  /**
+   * Отчёт по кассе с группировкой по городам и назначениям платежа
+   */
+  async getCashByPurpose(query: any, user?: any) {
+    const startTime = Date.now();
+    const { startDate, endDate, city, purposes } = query;
+
+    const where: any = {};
+    
+    // Фильтр по датам
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) where.createdAt.gte = new Date(startDate);
+      if (endDate) where.createdAt.lte = new Date(endDate);
+    }
+    
+    // Фильтр по городу
+    if (city) {
+      where.city = city;
+    }
+    
+    // Фильтр по городам директора
+    if (user?.role === 'director' && user?.cities) {
+      if (city && !user.cities.includes(city)) {
+        return { success: true, data: { cities: [], totals: { income: 0, expense: 0, balance: 0 } } };
+      }
+      if (!city) {
+        where.city = { in: user.cities };
+      }
+    }
+    
+    // Фильтр по назначениям платежа (если передан массив)
+    if (purposes && purposes.length > 0) {
+      const purposeArray = Array.isArray(purposes) ? purposes : purposes.split(',');
+      where.paymentPurpose = { in: purposeArray };
+    }
+
+    // Группируем по городу, назначению и типу операции
+    const cashStats = await this.prisma.cash.groupBy({
+      by: ['city', 'paymentPurpose', 'name'],
+      where,
+      _sum: { amount: true },
+      _count: { id: true },
+    });
+
+    // Собираем данные по городам
+    const citiesMap = new Map<string, Map<string, { income: number; expense: number }>>();
+    let grandTotalIncome = 0;
+    let grandTotalExpense = 0;
+
+    cashStats.forEach(stat => {
+      const cityName = stat.city || 'Не указан';
+      const purpose = stat.paymentPurpose || 'Без назначения';
+      const amount = Number(stat._sum.amount || 0);
+
+      if (!citiesMap.has(cityName)) {
+        citiesMap.set(cityName, new Map());
+      }
+
+      const purposeMap = citiesMap.get(cityName)!;
+      if (!purposeMap.has(purpose)) {
+        purposeMap.set(purpose, { income: 0, expense: 0 });
+      }
+
+      const purposeData = purposeMap.get(purpose)!;
+      if (stat.name === 'приход') {
+        purposeData.income += amount;
+        grandTotalIncome += amount;
+      } else if (stat.name === 'расход') {
+        purposeData.expense += amount;
+        grandTotalExpense += amount;
+      }
+    });
+
+    // Формируем результат
+    const cities = Array.from(citiesMap.entries()).map(([cityName, purposeMap]) => {
+      const purposes: any[] = [];
+      let cityIncome = 0;
+      let cityExpense = 0;
+
+      purposeMap.forEach((data, purpose) => {
+        purposes.push({
+          purpose,
+          income: data.income,
+          expense: data.expense,
+          balance: data.income - data.expense,
+        });
+        cityIncome += data.income;
+        cityExpense += data.expense;
+      });
+
+      // Сортируем назначения по сумме (по убыванию)
+      purposes.sort((a, b) => (b.income + b.expense) - (a.income + a.expense));
+
+      return {
+        city: cityName,
+        purposes,
+        totalIncome: cityIncome,
+        totalExpense: cityExpense,
+        balance: cityIncome - cityExpense,
+      };
+    });
+
+    // Сортируем города по сумме
+    cities.sort((a, b) => (b.totalIncome + b.totalExpense) - (a.totalIncome + a.totalExpense));
+
+    const duration = Date.now() - startTime;
+    console.log(`✅ getCashByPurpose completed in ${duration}ms (${cities.length} cities)`);
+
+    return {
+      success: true,
+      data: {
+        cities,
+        totals: {
+          income: grandTotalIncome,
+          expense: grandTotalExpense,
+          balance: grandTotalIncome - grandTotalExpense,
+        },
+      },
+    };
+  }
+
   async getCallsReport(query: any) {
     const { startDate, endDate, operatorId } = query;
 

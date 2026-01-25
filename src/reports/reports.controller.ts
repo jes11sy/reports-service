@@ -48,6 +48,15 @@ export class ReportsController {
     return this.reportsService.getFinanceReport(query);
   }
 
+  @Get('cash/by-purpose')
+  @UseGuards(CookieJwtAuthGuard, RolesGuard)
+  @ApiBearerAuth()
+  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @ApiOperation({ summary: 'Get cash report grouped by city and payment purpose' })
+  async getCashByPurpose(@Query() query: any, @Request() req: any) {
+    return this.reportsService.getCashByPurpose(query, req.user);
+  }
+
   @Get('calls')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
