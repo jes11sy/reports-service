@@ -245,13 +245,56 @@ export class ReportsService {
       ? (Array.isArray(purposes) ? purposes : purposes.split(','))
       : null;
 
-    // Группируем по городу, назначению и типу операции
-    const cashStats = await this.prisma.cash.groupBy({
-      by: ['city', 'paymentPurpose', 'name'],
-      where,
-      _sum: { amount: true },
-      _count: { id: true },
-    });
+    // Используем RAW SQL для точных расчетов (как в cash-service)
+    // GroupBy с Prisma может терять точность на Decimal полях
+    let dateCondition = '';
+    const params: any[] = [];
+    let paramIdx = 1;
+    
+    if (startDate) {
+      dateCondition += ` AND date_create >= $${paramIdx}`;
+      params.push(new Date(startDate));
+      paramIdx++;
+    }
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      dateCondition += ` AND date_create <= $${paramIdx}`;
+      params.push(end);
+      paramIdx++;
+    }
+    
+    let cityCondition = '';
+    if (city) {
+      cityCondition = ` AND city = $${paramIdx}`;
+      params.push(city);
+      paramIdx++;
+    } else if (user?.role === 'director' && user?.cities?.length > 0) {
+      cityCondition = ` AND city = ANY($${paramIdx}::text[])`;
+      params.push(user.cities);
+      paramIdx++;
+    }
+    
+    const cashStats = await this.prisma.$queryRawUnsafe<Array<{
+      city: string | null;
+      payment_purpose: string | null;
+      name: string;
+      total_amount: any;
+      count: bigint;
+    }>>(
+      `SELECT 
+        city,
+        payment_purpose,
+        name,
+        COALESCE(SUM(amount), 0) as total_amount,
+        COUNT(*) as count
+      FROM cash
+      WHERE 1=1 ${dateCondition} ${cityCondition}
+      GROUP BY city, payment_purpose, name`,
+      ...params
+    );
+    
+    console.log(`[getCashByPurpose] Raw SQL returned ${cashStats.length} rows`);
 
     /**
      * Нормализация назначения платежа
@@ -276,8 +319,9 @@ export class ReportsService {
 
     cashStats.forEach(stat => {
       const cityName = stat.city || 'Не указан';
-      const purpose = normalizePurpose(stat.paymentPurpose);
-      const amount = Number(stat._sum.amount || 0);
+      const purpose = normalizePurpose(stat.payment_purpose);
+      // Конвертируем Decimal в число
+      const amount = Number(stat.total_amount) || 0;
 
       // Фильтр по нормализованным назначениям (после объединения "Заказ №..." в "Заказ")
       if (purposeFilter && purposeFilter.length > 0 && !purposeFilter.includes(purpose)) {
