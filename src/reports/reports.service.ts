@@ -65,7 +65,11 @@ export class ReportsService {
     if (startDate || endDate) {
       orderWhere.closingData = {};
       if (startDate) orderWhere.closingData.gte = new Date(startDate);
-      if (endDate) orderWhere.closingData.lte = new Date(endDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        orderWhere.closingData.lte = end;
+      }
     }
     if (masterId) orderWhere.masterId = +masterId;
 
@@ -208,11 +212,16 @@ export class ReportsService {
 
     const where: any = {};
     
-    // Фильтр по датам
+    // Фильтр по датам (используем dateCreate - дату транзакции, не createdAt)
     if (startDate || endDate) {
-      where.createdAt = {};
-      if (startDate) where.createdAt.gte = new Date(startDate);
-      if (endDate) where.createdAt.lte = new Date(endDate);
+      where.dateCreate = {};
+      if (startDate) where.dateCreate.gte = new Date(startDate);
+      if (endDate) {
+        // Добавляем конец дня (23:59:59.999) чтобы включить весь день
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        where.dateCreate.lte = end;
+      }
     }
     
     // Фильтр по городу
@@ -418,7 +427,11 @@ export class ReportsService {
     if (startDate || endDate) {
       orderWhere.closingData = {};
       if (startDate) orderWhere.closingData.gte = new Date(startDate);
-      if (endDate) orderWhere.closingData.lte = new Date(endDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        orderWhere.closingData.lte = end;
+      }
     }
     
     // Если указан конкретный город
@@ -458,12 +471,15 @@ export class ReportsService {
     // 1. Группированная статистика по заказам (1 мощный запрос вместо 13*N)
     // Используем сырой SQL для максимальной эффективности
     let dateCondition = '';
-    if (startDate && endDate) {
-      dateCondition = `AND closing_data >= '${new Date(startDate).toISOString()}' AND closing_data <= '${new Date(endDate).toISOString()}'`;
-    } else if (startDate) {
-      dateCondition = `AND closing_data >= '${new Date(startDate).toISOString()}'`;
-    } else if (endDate) {
-      dateCondition = `AND closing_data <= '${new Date(endDate).toISOString()}'`;
+    if (startDate || endDate) {
+      if (startDate) {
+        dateCondition += ` AND closing_data >= '${new Date(startDate).toISOString()}'`;
+      }
+      if (endDate) {
+        const endOfDay = new Date(endDate);
+        endOfDay.setHours(23, 59, 59, 999);
+        dateCondition += ` AND closing_data <= '${endOfDay.toISOString()}'`;
+      }
     }
 
     const orderStatsQuery = `
@@ -527,7 +543,20 @@ export class ReportsService {
       modern_count: bigint;
     }>>(modernStatsQuery, cityList);
 
-    // 4. Кассовая статистика по городам (1 запрос)
+    // 4. Кассовая статистика по городам (1 запрос) - с фильтром по датам
+    let cashDateCondition = '';
+    if (startDate || endDate) {
+      if (startDate) {
+        cashDateCondition += ` AND date_create >= '${new Date(startDate).toISOString()}'`;
+      }
+      if (endDate) {
+        // Добавляем конец дня (23:59:59.999) чтобы включить весь день
+        const cashEndDate = new Date(endDate);
+        cashEndDate.setHours(23, 59, 59, 999);
+        cashDateCondition += ` AND date_create <= '${cashEndDate.toISOString()}'`;
+      }
+    }
+
     const cashStatsQuery = `
       SELECT 
         city,
@@ -535,6 +564,7 @@ export class ReportsService {
         COALESCE(SUM(amount), 0) as total_amount
       FROM cash
       WHERE city = ANY($1::text[])
+        ${cashDateCondition}
       GROUP BY city, name
     `;
 
@@ -778,7 +808,11 @@ export class ReportsService {
     if (startDate || endDate) {
       orderWhere.closingData = {};
       if (startDate) orderWhere.closingData.gte = new Date(startDate);
-      if (endDate) orderWhere.closingData.lte = new Date(endDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        orderWhere.closingData.lte = end;
+      }
     }
     
     // Фильтр по конкретному городу
