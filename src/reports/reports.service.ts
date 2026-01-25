@@ -557,7 +557,8 @@ export class ReportsService {
     const checkCategoriesQuery = `
       SELECT 
         city,
-        COUNT(*) FILTER (WHERE status_order = 'Готово' AND clean > 0 AND clean < 10000) as micro_count,
+        COUNT(*) FILTER (WHERE status_order = 'Готово' AND clean > 0 AND clean < 1500) as micro_under_1500,
+        COUNT(*) FILTER (WHERE status_order = 'Готово' AND clean >= 1500 AND clean < 10000) as micro_1500_10000,
         COUNT(*) FILTER (WHERE status_order = 'Готово' AND clean >= 10000) as over10k_count
       FROM orders
       WHERE city = ANY($1::text[])
@@ -567,7 +568,8 @@ export class ReportsService {
 
     const checkCategories = await this.prisma.$queryRawUnsafe<Array<{
       city: string;
-      micro_count: bigint;
+      micro_under_1500: bigint;
+      micro_1500_10000: bigint;
       over10k_count: bigint;
     }>>(checkCategoriesQuery, cityList);
 
@@ -672,7 +674,8 @@ export class ReportsService {
         .reduce((max, o) => Math.max(max, Number(o.max_clean)), 0);
 
       // Категории чеков
-      const microCheckCount = cityChecks ? Number(cityChecks.micro_count) : 0;
+      const microUnder1500 = cityChecks ? Number(cityChecks.micro_under_1500) : 0;
+      const micro1500to10000 = cityChecks ? Number(cityChecks.micro_1500_10000) : 0;
       const over10kCount = cityChecks ? Number(cityChecks.over10k_count) : 0;
 
       // Модерн
@@ -707,7 +710,8 @@ export class ReportsService {
           zeroOrders,
           completedOrders,
           completedPercent,
-          microCheckCount,
+          microUnder1500,
+          micro1500to10000,
           over10kCount,
           avgCheck,
           maxCheck: maxCheckValue,
