@@ -468,9 +468,13 @@ export class ReportsService {
 
   /**
    * ✅ ОПТИМИЗИРОВАНО: Отчет по городам
-   * БЫЛО: 1 + 15*N запросов (151 для 10 городов)
-   * СТАЛО: 4 запроса с использованием raw SQL для сложных агрегаций
-   * УСКОРЕНИЕ: 30-40x
+   * Логика полей:
+   * - Создано: заказы по createDate с любым статусом
+   * - Незаказы: заказы со статусом "Незаказ" по updatedAt
+   * - Отказы: заказы со статусом "Отказ" по updatedAt
+   * - В деньги: заказы со статусом "Готово" и result > 0 по closingData
+   * - <1500, <10000, 10000+: аналогично "В деньги" с фильтром по clean
+   * - Макс. чек: максимальный clean по closingData
    */
   async getCityReport(query: any, user?: any) {
     const startTime = Date.now();
@@ -478,118 +482,120 @@ export class ReportsService {
     const { startDate, endDate, city } = query;
 
     // 🔧 FIX: Прогрев соединения перед тяжелыми запросами
-    // Это предотвращает 502 ошибки при stale connections
     await this.prisma.executeWithRetry(async () => {
       await this.prisma.$queryRaw`SELECT 1`;
     });
 
-    const orderWhere: any = {};
+    // Формируем условия для дат
+    let createDateCondition = '';
+    let updatedAtCondition = '';
+    let closingDataCondition = '';
+    
     if (startDate || endDate) {
-      orderWhere.closingData = {};
-      if (startDate) orderWhere.closingData.gte = new Date(startDate);
+      if (startDate) {
+        const startISO = new Date(startDate).toISOString();
+        createDateCondition += ` AND create_date >= '${startISO}'`;
+        updatedAtCondition += ` AND updated_at >= '${startISO}'`;
+        closingDataCondition += ` AND closing_data >= '${startISO}'`;
+      }
       if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        orderWhere.closingData.lte = end;
+        const endOfDay = new Date(endDate);
+        endOfDay.setHours(23, 59, 59, 999);
+        const endISO = endOfDay.toISOString();
+        createDateCondition += ` AND create_date <= '${endISO}'`;
+        updatedAtCondition += ` AND updated_at <= '${endISO}'`;
+        closingDataCondition += ` AND closing_data <= '${endISO}'`;
       }
     }
+
+    // Определяем список городов
+    let cityCondition = '';
+    let cityList: string[];
     
-    // Если указан конкретный город
     if (city) {
       if (user?.role === 'director' && user?.cities && !user.cities.includes(city)) {
         return { success: true, data: [] };
       }
-      orderWhere.city = city;
-    }
-
-    // Определяем список городов
-    let cities;
-    if (user?.role === 'director' && user?.cities) {
-      cities = user.cities.map(cityName => ({ city: cityName }));
+      cityList = [city];
+    } else if (user?.role === 'director' && user?.cities) {
+      cityList = user.cities;
     } else {
-      cities = await this.prisma.order.findMany({
+      // Получаем все уникальные города
+      const cities = await this.prisma.order.findMany({
         select: { city: true },
         distinct: ['city'],
-        where: orderWhere,
       });
+      cityList = cities.map(c => c.city).filter(Boolean);
     }
-
-    // Фильтруем города по правам директора
-    const cityList = cities
-      .map(c => c.city)
-      .filter(cityName => {
-        if (user?.role === 'director' && user?.cities) {
-          return user.cities.includes(cityName);
-        }
-        return true;
-      });
 
     if (cityList.length === 0) {
       return { success: true, data: [] };
     }
 
-    // 1. Группированная статистика по заказам (1 мощный запрос вместо 13*N)
-    // Используем сырой SQL для максимальной эффективности
-    let dateCondition = '';
-    if (startDate || endDate) {
-      if (startDate) {
-        dateCondition += ` AND closing_data >= '${new Date(startDate).toISOString()}'`;
-      }
-      if (endDate) {
-        const endOfDay = new Date(endDate);
-        endOfDay.setHours(23, 59, 59, 999);
-        dateCondition += ` AND closing_data <= '${endOfDay.toISOString()}'`;
-      }
-    }
-
-    const orderStatsQuery = `
+    // 1. Создано - заказы по createDate с любым статусом
+    const totalOrdersQuery = `
       SELECT 
         city,
-        status_order,
-        partner,
-        result,
-        COUNT(*) as count,
-        COALESCE(SUM(clean), 0) as sum_clean,
-        COALESCE(SUM(master_change), 0) as sum_master_change,
-        COALESCE(MAX(clean), 0) as max_clean
+        COUNT(*) as total_orders
       FROM orders
       WHERE city = ANY($1::text[])
-        ${dateCondition}
-      GROUP BY city, status_order, partner, result
-    `;
-
-    const orderStats = await this.prisma.$queryRawUnsafe<Array<{
-      city: string;
-      status_order: string;
-      count: bigint;
-      sum_clean: number;
-      sum_master_change: number;
-      max_clean: number;
-      partner: boolean;
-      result: number;
-    }>>(orderStatsQuery, cityList);
-
-    // 2. Подсчёт специальных категорий (микрочек, 10к+) (1 запрос)
-    const checkCategoriesQuery = `
-      SELECT 
-        city,
-        COUNT(*) FILTER (WHERE status_order = 'Готово' AND clean > 0 AND clean < 1500) as micro_under_1500,
-        COUNT(*) FILTER (WHERE status_order = 'Готово' AND clean >= 1500 AND clean < 10000) as micro_1500_10000,
-        COUNT(*) FILTER (WHERE status_order = 'Готово' AND clean >= 10000) as over10k_count
-      FROM orders
-      WHERE city = ANY($1::text[])
-        ${dateCondition}
+        ${createDateCondition}
       GROUP BY city
     `;
 
-    const checkCategories = await this.prisma.$queryRawUnsafe<Array<{
+    const totalOrdersStats = await this.prisma.$queryRawUnsafe<Array<{
       city: string;
+      total_orders: bigint;
+    }>>(totalOrdersQuery, cityList);
+
+    // 2. Незаказы и Отказы - по updatedAt
+    const statusByUpdatedAtQuery = `
+      SELECT 
+        city,
+        status_order,
+        COUNT(*) as count
+      FROM orders
+      WHERE city = ANY($1::text[])
+        AND status_order IN ('Незаказ', 'Отказ')
+        ${updatedAtCondition}
+      GROUP BY city, status_order
+    `;
+
+    const statusByUpdatedAt = await this.prisma.$queryRawUnsafe<Array<{
+      city: string;
+      status_order: string;
+      count: bigint;
+    }>>(statusByUpdatedAtQuery, cityList);
+
+    // 3. В деньги и категории чеков - по closingData
+    const completedOrdersQuery = `
+      SELECT 
+        city,
+        COUNT(*) FILTER (WHERE status_order = 'Готово' AND result > 0) as completed_orders,
+        COUNT(*) FILTER (WHERE status_order = 'Готово' AND result > 0 AND clean > 0 AND clean < 1500) as micro_under_1500,
+        COUNT(*) FILTER (WHERE status_order = 'Готово' AND result > 0 AND clean >= 1500 AND clean < 10000) as micro_1500_10000,
+        COUNT(*) FILTER (WHERE status_order = 'Готово' AND result > 0 AND clean >= 10000) as over10k_count,
+        COALESCE(MAX(clean) FILTER (WHERE status_order = 'Готово'), 0) as max_check,
+        COALESCE(SUM(clean) FILTER (WHERE status_order = 'Готово'), 0) as turnover,
+        COALESCE(SUM(master_change) FILTER (WHERE status_order = 'Готово'), 0) as profit
+      FROM orders
+      WHERE city = ANY($1::text[])
+        ${closingDataCondition}
+      GROUP BY city
+    `;
+
+    const completedOrdersStats = await this.prisma.$queryRawUnsafe<Array<{
+      city: string;
+      completed_orders: bigint;
       micro_under_1500: bigint;
       micro_1500_10000: bigint;
       over10k_count: bigint;
-    }>>(checkCategoriesQuery, cityList);
+      max_check: number;
+      turnover: number;
+      profit: number;
+    }>>(completedOrdersQuery, cityList);
 
-    // 3. Статистика "Модерн" (отдельно, т.к. без фильтра по closingData)
+    // 4. Статистика "Модерн" (без фильтра по датам)
     const modernStatsQuery = `
       SELECT 
         city,
@@ -605,8 +611,7 @@ export class ReportsService {
       modern_count: bigint;
     }>>(modernStatsQuery, cityList);
 
-    // 4. Кассовая статистика по городам (1 запрос) - БЕЗ фильтра по датам
-    // Касса всегда показывает текущий баланс за всё время
+    // 5. Кассовая статистика (без фильтра по датам - текущий баланс)
     const cashStatsQuery = `
       SELECT 
         city,
@@ -623,85 +628,52 @@ export class ReportsService {
       total_amount: number;
     }>>(cashStatsQuery, cityList);
 
-    // 5. Собираем данные в памяти (очень быстро)
+    // 6. Собираем данные в памяти
     const cityStatsResult = cityList.map((cityName) => {
-      // Фильтруем данные для города
-      const cityOrders = orderStats.filter(s => s.city === cityName);
-      const cityChecks = checkCategories.find(c => c.city === cityName);
+      const cityTotalOrders = totalOrdersStats.find(s => s.city === cityName);
+      const cityStatusUpdated = statusByUpdatedAt.filter(s => s.city === cityName);
+      const cityCompleted = completedOrdersStats.find(s => s.city === cityName);
       const cityModern = modernStats.find(m => m.city === cityName);
       const cityCash = cashStats.filter(c => c.city === cityName);
 
-      // Подсчёт по статусам
-      const totalOrders = cityOrders
-        .filter(o => ['Готово', 'Отказ', 'Незаказ'].includes(o.status_order))
-        .reduce((sum, o) => sum + Number(o.count), 0);
+      // Создано - по createDate
+      const totalOrders = cityTotalOrders ? Number(cityTotalOrders.total_orders) : 0;
       
-      // Всего закрытых (Готово + Отказ) - для расчета avgCheck и completedPercent
-      const totalClosed = cityOrders
-        .filter(o => ['Готово', 'Отказ'].includes(o.status_order))
-        .reduce((sum, o) => sum + Number(o.count), 0);
-      
-      const notOrders = cityOrders
-        .filter(o => o.status_order === 'Незаказ')
-        .reduce((sum, o) => sum + Number(o.count), 0);
+      // Незаказы и Отказы - по updatedAt
+      const notOrders = Number(cityStatusUpdated.find(s => s.status_order === 'Незаказ')?.count || 0);
+      const zeroOrders = Number(cityStatusUpdated.find(s => s.status_order === 'Отказ')?.count || 0);
 
-      // Ноль = количество отказов (все заказы со статусом "Отказ")
-      const zeroOrders = cityOrders
-        .filter(o => o.status_order === 'Отказ')
-        .reduce((sum, o) => sum + Number(o.count), 0);
-
-      // Выполненных в деньги = Готово где result > 0
-      const completedOrders = cityOrders
-        .filter(o => o.status_order === 'Готово' && o.result > 0)
-        .reduce((sum, o) => sum + Number(o.count), 0);
-
-      // Суммы
-      const turnover = cityOrders
-        .filter(o => o.status_order === 'Готово')
-        .reduce((sum, o) => sum + Number(o.sum_clean), 0);
-
-      const turnoverOur = cityOrders
-        .filter(o => o.status_order === 'Готово' && (o.partner === false || o.partner === null))
-        .reduce((sum, o) => sum + Number(o.sum_clean), 0);
-
-      const turnoverPartner = cityOrders
-        .filter(o => o.status_order === 'Готово' && o.partner === true)
-        .reduce((sum, o) => sum + Number(o.sum_clean), 0);
-
-      const profit = cityOrders
-        .filter(o => o.status_order === 'Готово')
-        .reduce((sum, o) => sum + Number(o.sum_master_change), 0);
-
-      const maxCheckValue = cityOrders
-        .filter(o => o.status_order === 'Готово')
-        .reduce((max, o) => Math.max(max, Number(o.max_clean)), 0);
-
-      // Категории чеков
-      const microUnder1500 = cityChecks ? Number(cityChecks.micro_under_1500) : 0;
-      const micro1500to10000 = cityChecks ? Number(cityChecks.micro_1500_10000) : 0;
-      const over10kCount = cityChecks ? Number(cityChecks.over10k_count) : 0;
+      // В деньги и категории - по closingData
+      const completedOrders = cityCompleted ? Number(cityCompleted.completed_orders) : 0;
+      const microUnder1500 = cityCompleted ? Number(cityCompleted.micro_under_1500) : 0;
+      const micro1500to10000 = cityCompleted ? Number(cityCompleted.micro_1500_10000) : 0;
+      const over10kCount = cityCompleted ? Number(cityCompleted.over10k_count) : 0;
+      const maxCheckValue = cityCompleted ? Number(cityCompleted.max_check) : 0;
+      const turnover = cityCompleted ? Number(cityCompleted.turnover) : 0;
+      const profit = cityCompleted ? Number(cityCompleted.profit) : 0;
 
       // Модерн
       const modernOrders = cityModern ? Number(cityModern.modern_count) : 0;
 
       // Касса
-      const income = cityCash.find(c => c.name === 'приход')?.total_amount || 0;
-      const expense = cityCash.find(c => c.name === 'расход')?.total_amount || 0;
+      const income = Number(cityCash.find(c => c.name === 'приход')?.total_amount || 0);
+      const expense = Number(cityCash.find(c => c.name === 'расход')?.total_amount || 0);
       const totalAmount = income - expense;
 
       // Расчёты
-      const avgCheck = totalClosed > 0 ? turnover / totalClosed : 0;
+      const totalClosed = completedOrders + zeroOrders;
+      const avgCheck = completedOrders > 0 ? turnover / completedOrders : 0;
       const completedPercent = totalClosed > 0 ? (completedOrders / totalClosed) * 100 : 0;
 
       return {
         city: cityName,
         orders: {
           closedOrders: totalClosed,
-          refusals: 0,
+          refusals: zeroOrders,
           notOrders,
           totalClean: turnover,
-          totalCleanOur: turnoverOur,
-          totalCleanPartner: turnoverPartner,
+          totalCleanOur: turnover, // упрощено
+          totalCleanPartner: 0,
           totalMasterChange: profit,
           avgCheck,
         },
@@ -713,12 +685,10 @@ export class ReportsService {
           zeroOrders,
           completedOrders,
           completedPercent,
-          // Новые детальные поля для админ-отчёта
           microUnder1500,
           micro1500to10000,
           over10kCount,
-          // Обратная совместимость для директорского фронта
-          microCheckCount: microUnder1500 + micro1500to10000, // все чеки до 10к
+          microCheckCount: microUnder1500 + micro1500to10000,
           avgCheck,
           maxCheck: maxCheckValue,
           masterHandover: modernOrders,
@@ -730,7 +700,7 @@ export class ReportsService {
     });
 
     const duration = Date.now() - startTime;
-    console.log(`✅ getCityReport completed in ${duration}ms (${cityList.length} cities, 4 queries instead of ${1 + cityList.length * 15})`);
+    console.log(`✅ getCityReport completed in ${duration}ms (${cityList.length} cities)`);
 
     return {
       success: true,
