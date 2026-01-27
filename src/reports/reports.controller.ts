@@ -36,7 +36,7 @@ export class ReportsController {
   @Get('orders')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: 'Get orders statistics' })
   async getOrdersReport(@Query() query: OrdersReportQueryDto) {
@@ -46,7 +46,7 @@ export class ReportsController {
   @Get('masters')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Get masters report' })
   async getMastersReport(
@@ -59,7 +59,7 @@ export class ReportsController {
   @Get('finance')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.DIRECTOR)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Get finance report' })
   async getFinanceReport(@Query() query: FinanceReportQueryDto) {
@@ -69,7 +69,7 @@ export class ReportsController {
   @Get('cash/by-purpose')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Get cash report grouped by city and payment purpose' })
   async getCashByPurpose(
@@ -82,7 +82,7 @@ export class ReportsController {
   @Get('calls')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: 'Get calls statistics' })
   async getCallsReport(@Query() query: CallsReportQueryDto) {
@@ -92,7 +92,7 @@ export class ReportsController {
   @Get('city')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @Throttle({ default: { limit: 10, ttl: 60000 } }) // Тяжёлый запрос - строгий лимит
   @ApiOperation({ summary: 'Get city report' })
   async getCityReport(
@@ -105,7 +105,7 @@ export class ReportsController {
   @Get('city/:city')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Get detailed city report' })
   async getCityDetailedReport(
@@ -118,7 +118,7 @@ export class ReportsController {
   @Get('campaigns')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @Throttle({ default: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Get campaigns report by cities' })
   async getCampaignsReport(
@@ -131,7 +131,7 @@ export class ReportsController {
   @Get('export/excel')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.DIRECTOR)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @Throttle({ default: { limit: 5, ttl: 60000 } }) // Экспорт - очень строгий лимит
   @ApiOperation({ summary: 'Export report to Excel' })
   async exportExcel(@Query() query: ExportQueryDto, @Response() res: any) {
