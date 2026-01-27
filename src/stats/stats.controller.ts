@@ -22,11 +22,11 @@ export class StatsController {
     };
   }
 
-  // Личная статистика оператора
+  // Личная статистика оператора/админа колл-центра
   @Get('my')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.CALLCENTRE_OPERATOR)
+  @Roles(UserRole.CALLCENTRE_OPERATOR, UserRole.CALLCENTRE_ADMIN, UserRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить личную статистику оператора' })
