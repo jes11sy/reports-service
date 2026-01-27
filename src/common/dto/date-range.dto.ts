@@ -3,6 +3,8 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 
 @ValidatorConstraint({ name: 'dateRangeValidator', async: false })
 export class DateRangeValidator implements ValidatorConstraintInterface {
+  private errorMessage = 'Date range must not exceed 365 days';
+
   validate(value: any, args: any) {
     const startDate = args.object.startDate;
     const endDate = args.object.endDate;
@@ -14,16 +16,27 @@ export class DateRangeValidator implements ValidatorConstraintInterface {
     const start = new Date(startDate);
     const end = new Date(endDate);
     
+    // ✅ FIX #106: Проверка что endDate >= startDate
+    if (end.getTime() < start.getTime()) {
+      this.errorMessage = 'End date must be greater than or equal to start date';
+      return false;
+    }
+    
     // Максимальный диапазон - 1 год
     const maxRangeDays = 365;
-    const diffTime = Math.abs(end.getTime() - start.getTime());
+    const diffTime = end.getTime() - start.getTime(); // Убран Math.abs - теперь end > start гарантировано
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     
-    return diffDays <= maxRangeDays;
+    if (diffDays > maxRangeDays) {
+      this.errorMessage = 'Date range must not exceed 365 days';
+      return false;
+    }
+    
+    return true;
   }
 
   defaultMessage() {
-    return 'Date range must not exceed 365 days';
+    return this.errorMessage;
   }
 }
 

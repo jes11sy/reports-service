@@ -1,4 +1,4 @@
-import { Injectable, ExecutionContext, UnauthorizedException, Inject } from '@nestjs/common';
+import { Injectable, ExecutionContext, UnauthorizedException, Inject, Logger } from '@nestjs/common';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { CookieConfig, getCookieName } from '../../config/cookie.config';
 import { RedisService } from '../../redis/redis.service';
@@ -15,6 +15,8 @@ import { RedisService } from '../../redis/redis.service';
  */
 @Injectable()
 export class CookieJwtAuthGuard extends JwtAuthGuard {
+  private readonly logger = new Logger(CookieJwtAuthGuard.name); // ✅ FIX #117
+
   constructor(
     @Inject(RedisService) private readonly redis: RedisService,
   ) {
@@ -101,7 +103,7 @@ export class CookieJwtAuthGuard extends JwtAuthGuard {
           throw error;
         }
         // Логируем ошибку, но продолжаем работу
-        console.warn('Force logout check failed (Redis unavailable):', error.message);
+        this.logger.warn(`Force logout check failed (Redis unavailable): ${error.message}`);
       }
     }
 

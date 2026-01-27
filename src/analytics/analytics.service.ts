@@ -1,31 +1,72 @@
 import { Injectable, Logger, Inject } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  OrderStatus,
+  CallStatus,
+  IN_PROGRESS_STATUSES,
+  WorkStatus,
+} from '../common/constants/order-statuses';
 
 @Injectable()
 export class AnalyticsService {
   private readonly logger = new Logger(AnalyticsService.name);
 
+  // Лимиты из конфигурации
+  private readonly DEFAULT_LIMIT: number;
+  private readonly MAX_LIMIT: number;
+
+  // TTL кеша из конфигурации
+  private readonly CACHE_TTL: {
+    DASHBOARD: number;
+    OPERATORS: number;
+    CITY: number;
+    CAMPAIGN: number;
+    DAILY: number;
+  };
+
   constructor(
     private prisma: PrismaService,
+    private configService: ConfigService,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
-  ) {}
+  ) {
+    this.DEFAULT_LIMIT = this.configService.get<number>('ANALYTICS_DEFAULT_LIMIT', 1000);
+    this.MAX_LIMIT = this.configService.get<number>('ANALYTICS_MAX_LIMIT', 5000);
+    
+    this.CACHE_TTL = {
+      DASHBOARD: this.configService.get<number>('CACHE_TTL_DASHBOARD', 30000),
+      OPERATORS: this.configService.get<number>('CACHE_TTL_OPERATORS', 120000),
+      CITY: this.configService.get<number>('CACHE_TTL_CITY', 300000),
+      CAMPAIGN: this.configService.get<number>('CACHE_TTL_CAMPAIGN', 300000),
+      DAILY: this.configService.get<number>('CACHE_TTL_DAILY', 600000),
+    };
+  }
+
+  /**
+   * ✅ Улучшенный ключ кеша с версионированием
+   */
+  private buildCacheKey(prefix: string, params: Record<string, any>): string {
+    const sortedParams = Object.keys(params)
+      .sort()
+      .filter(key => params[key] !== undefined && params[key] !== null)
+      .map(key => `${key}:${params[key]}`)
+      .join('|');
+    return `v2:${prefix}:${sortedParams || 'all'}`;
+  }
 
   /**
    * ✅ ОПТИМИЗИРОВАНО: Статистика операторов
-   * БЫЛО: 1 + 7*N запросов (141 для 20 операторов)
-   * СТАЛО: 3 запроса (независимо от количества операторов)
-   * УСКОРЕНИЕ: 50-70x + кеширование (100x для повторных запросов)
    */
   async getOperatorStatistics(startDate?: string, endDate?: string, operatorId?: number) {
     const startTime = Date.now();
 
     // Проверяем кеш
-    const cacheKey = `operator-stats:${operatorId || 'all'}:${startDate || ''}:${endDate || ''}`;
+    const cacheKey = this.buildCacheKey('operator-stats', { operatorId, startDate, endDate });
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) {
-      this.logger.log(`✅ getOperatorStatistics from CACHE in ${Date.now() - startTime}ms`);
+      this.logger.debug(`✅ getOperatorStatistics from CACHE in ${Date.now() - startTime}ms`);
       return cached;
     }
 
@@ -57,7 +98,7 @@ export class AnalyticsService {
       },
     });
 
-    // 2. Группированная статистика по звонкам (1 запрос вместо N*4)
+    // 2. Группированная статистика по звонкам
     const callStats = await this.prisma.call.groupBy({
       by: ['operatorId', 'status'],
       where: {
@@ -68,7 +109,7 @@ export class AnalyticsService {
       _avg: { duration: true },
     });
 
-    // 3. Группированная статистика по заказам (1 запрос вместо N*3)
+    // 3. Группированная статистика по заказам
     const orderStats = await this.prisma.order.groupBy({
       by: ['operatorNameId', 'statusOrder'],
       where: {
@@ -79,29 +120,25 @@ export class AnalyticsService {
       _sum: { result: true },
     });
 
-    // 4. Собираем данные в памяти (быстро, O(n))
+    // 4. Собираем данные в памяти
     const operatorStatsResult = operators.map((operator) => {
-      // Звонки оператора
       const operatorCalls = callStats.filter(c => c.operatorId === operator.id);
       const totalCalls = operatorCalls.reduce((sum, c) => sum + c._count.id, 0);
-      const answeredCalls = operatorCalls.find(c => c.status === 'answered')?._count.id || 0;
-      const missedCalls = operatorCalls.find(c => c.status === 'missed')?._count.id || 0;
+      const answeredCalls = operatorCalls.find(c => c.status === CallStatus.ANSWERED)?._count.id || 0;
+      const missedCalls = operatorCalls.find(c => c.status === CallStatus.MISSED)?._count.id || 0;
       
-      // Средняя длительность (взвешенная по количеству звонков)
       const avgDuration = operatorCalls.reduce((sum, c) => {
         return sum + ((c._avg.duration || 0) * c._count.id);
       }, 0) / (totalCalls || 1);
 
-      // Заказы оператора
       const operatorOrders = orderStats.filter(o => o.operatorNameId === operator.id);
       const totalOrders = operatorOrders.reduce((sum, o) => sum + o._count.id, 0);
-      const completedOrders = operatorOrders.find(o => o.statusOrder === 'Закрыт')?._count.id || 0;
+      const completedOrders = operatorOrders.find(o => o.statusOrder === OrderStatus.COMPLETED)?._count.id || 0;
       
       const totalRevenue = operatorOrders.reduce((sum, o) => {
         return sum + Number(o._sum.result || 0);
       }, 0);
 
-      // Метрики
       const conversionRate = answeredCalls > 0 ? (totalOrders / answeredCalls) * 100 : 0;
       const answerRate = totalCalls > 0 ? (answeredCalls / totalCalls) * 100 : 0;
 
@@ -121,42 +158,35 @@ export class AnalyticsService {
           completed: completedOrders,
           conversionRate: Math.round(conversionRate * 100) / 100,
           totalRevenue: Math.round(totalRevenue),
-          avgRevenue:
-            completedOrders > 0
-              ? Math.round(totalRevenue / completedOrders)
-              : 0,
+          avgRevenue: completedOrders > 0 ? Math.round(totalRevenue / completedOrders) : 0,
         },
       };
     });
 
     const duration = Date.now() - startTime;
-    this.logger.log(`✅ getOperatorStatistics completed in ${duration}ms (${operators.length} operators, 3 queries instead of ${1 + operators.length * 7})`);
+    this.logger.log(`✅ getOperatorStatistics completed in ${duration}ms (${operators.length} operators, 3 queries)`);
 
     const result = {
       success: true,
       data: operatorStatsResult,
     };
 
-    // Кешируем на 2 минуты (операторская статистика обновляется часто)
-    await this.cacheManager.set(cacheKey, result, 120000);
+    // Кешируем
+    await this.cacheManager.set(cacheKey, result, this.CACHE_TTL.OPERATORS);
 
     return result;
   }
 
   /**
    * ✅ ОПТИМИЗИРОВАНО: Аналитика по городам
-   * БЫЛО: 1 + 5*N запросов (51 для 10 городов)
-   * СТАЛО: 3 запроса
-   * УСКОРЕНИЕ: 15-20x + кеширование
    */
   async getCityAnalytics(startDate?: string, endDate?: string) {
     const startTime = Date.now();
 
-    // Проверяем кеш
-    const cacheKey = `city-analytics:${startDate || ''}:${endDate || ''}`;
+    const cacheKey = this.buildCacheKey('city-analytics', { startDate, endDate });
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) {
-      this.logger.log(`✅ getCityAnalytics from CACHE in ${Date.now() - startTime}ms`);
+      this.logger.debug(`✅ getCityAnalytics from CACHE in ${Date.now() - startTime}ms`);
       return cached;
     }
 
@@ -176,35 +206,32 @@ export class AnalyticsService {
       }
     }
 
-    // 1. Группированная статистика по заказам (1 запрос вместо N*3)
-    const orderStats = await this.prisma.order.groupBy({
-      by: ['city', 'statusOrder'],
-      where: orderDateFilter,
-      _count: { id: true },
-      _sum: { result: true },
-    });
-
-    // 2. Статистика по звонкам (2 запроса, т.к. в calls нет поля city)
-    const [totalCalls, answeredCalls] = await Promise.all([
+    // Группированная статистика
+    const [orderStats, totalCalls, answeredCalls] = await this.prisma.$transaction([
+      this.prisma.order.groupBy({
+        by: ['city', 'statusOrder'],
+        where: orderDateFilter,
+        _count: { id: true },
+        _sum: { result: true },
+      }),
       this.prisma.call.count({
         where: callDateFilter.dateCreate ? { dateCreate: callDateFilter.dateCreate } : {},
       }),
       this.prisma.call.count({
         where: {
-          status: 'answered',
+          status: CallStatus.ANSWERED,
           ...(callDateFilter.dateCreate && { dateCreate: callDateFilter.dateCreate }),
         },
       }),
     ]);
 
-    // 3. Получаем уникальные города и собираем данные в памяти
     const cities = [...new Set(orderStats.map(s => s.city))];
 
     const cityAnalytics = cities.map((city) => {
       const cityOrders = orderStats.filter(s => s.city === city);
       
       const totalOrders = cityOrders.reduce((sum, o) => sum + o._count.id, 0);
-      const completedOrders = cityOrders.find(o => o.statusOrder === 'Закрыт')?._count.id || 0;
+      const completedOrders = cityOrders.find(o => o.statusOrder === OrderStatus.COMPLETED)?._count.id || 0;
       
       const totalRevenue = cityOrders.reduce((sum, o) => {
         return sum + Number(o._sum.result || 0);
@@ -226,43 +253,35 @@ export class AnalyticsService {
         },
         revenue: {
           total: Math.round(totalRevenue),
-          avg:
-            completedOrders > 0
-              ? Math.round(totalRevenue / completedOrders)
-              : 0,
+          avg: completedOrders > 0 ? Math.round(totalRevenue / completedOrders) : 0,
         },
         conversionRate: Math.round(conversionRate * 100) / 100,
       };
     });
 
     const duration = Date.now() - startTime;
-    this.logger.log(`✅ getCityAnalytics completed in ${duration}ms (${cities.length} cities, 3 queries instead of ${1 + cities.length * 5})`);
+    this.logger.log(`✅ getCityAnalytics completed in ${duration}ms (${cities.length} cities, 3 queries)`);
 
     const result = {
       success: true,
       data: cityAnalytics.sort((a, b) => b.orders.total - a.orders.total),
     };
 
-    // Кешируем на 5 минут (аналитика по городам меняется редко)
-    await this.cacheManager.set(cacheKey, result, 300000);
+    await this.cacheManager.set(cacheKey, result, this.CACHE_TTL.CITY);
 
     return result;
   }
 
   /**
    * ✅ ОПТИМИЗИРОВАНО: Аналитика по РК
-   * БЫЛО: 1 + 5*N запросов
-   * СТАЛО: 3 запроса
-   * УСКОРЕНИЕ: 15-20x + кеширование
    */
   async getCampaignAnalytics(startDate?: string, endDate?: string) {
     const startTime = Date.now();
 
-    // Проверяем кеш
-    const cacheKey = `campaign-analytics:${startDate || ''}:${endDate || ''}`;
+    const cacheKey = this.buildCacheKey('campaign-analytics', { startDate, endDate });
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) {
-      this.logger.log(`✅ getCampaignAnalytics from CACHE in ${Date.now() - startTime}ms`);
+      this.logger.debug(`✅ getCampaignAnalytics from CACHE in ${Date.now() - startTime}ms`);
       return cached;
     }
 
@@ -282,35 +301,31 @@ export class AnalyticsService {
       }
     }
 
-    // 1. Группированная статистика по РК (1 запрос вместо N*3)
-    const campaignStats = await this.prisma.order.groupBy({
-      by: ['rk', 'statusOrder'],
-      where: orderDateFilter,
-      _count: { id: true },
-      _sum: { result: true },
-    });
-
-    // 2. Статистика по звонкам (2 запроса, т.к. в calls нет поля rk)
-    const [totalCalls, answeredCalls] = await Promise.all([
+    const [campaignStats, totalCalls, answeredCalls] = await this.prisma.$transaction([
+      this.prisma.order.groupBy({
+        by: ['rk', 'statusOrder'],
+        where: orderDateFilter,
+        _count: { id: true },
+        _sum: { result: true },
+      }),
       this.prisma.call.count({
         where: callDateFilter.dateCreate ? { dateCreate: callDateFilter.dateCreate } : {},
       }),
       this.prisma.call.count({
         where: {
-          status: 'answered',
+          status: CallStatus.ANSWERED,
           ...(callDateFilter.dateCreate && { dateCreate: callDateFilter.dateCreate }),
         },
       }),
     ]);
 
-    // 3. Получаем уникальные РК и собираем данные в памяти
     const campaigns = [...new Set(campaignStats.map(s => s.rk))];
 
     const campaignAnalytics = campaigns.map((rk) => {
       const rkOrders = campaignStats.filter(s => s.rk === rk);
       
       const totalOrders = rkOrders.reduce((sum, o) => sum + o._count.id, 0);
-      const completedOrders = rkOrders.find(o => o.statusOrder === 'Закрыт')?._count.id || 0;
+      const completedOrders = rkOrders.find(o => o.statusOrder === OrderStatus.COMPLETED)?._count.id || 0;
       
       const totalRevenue = rkOrders.reduce((sum, o) => {
         return sum + Number(o._sum.result || 0);
@@ -333,10 +348,7 @@ export class AnalyticsService {
         },
         revenue: {
           total: Math.round(totalRevenue),
-          avg:
-            completedOrders > 0
-              ? Math.round(totalRevenue / completedOrders)
-              : 0,
+          avg: completedOrders > 0 ? Math.round(totalRevenue / completedOrders) : 0,
           roi: Math.round(roi),
         },
         conversionRate: Math.round(conversionRate * 100) / 100,
@@ -344,96 +356,99 @@ export class AnalyticsService {
     });
 
     const duration = Date.now() - startTime;
-    this.logger.log(`✅ getCampaignAnalytics completed in ${duration}ms (${campaigns.length} campaigns, 3 queries instead of ${1 + campaigns.length * 5})`);
+    this.logger.log(`✅ getCampaignAnalytics completed in ${duration}ms (${campaigns.length} campaigns, 3 queries)`);
 
     const result = {
       success: true,
       data: campaignAnalytics.sort((a, b) => b.revenue.total - a.revenue.total),
     };
 
-    // Кешируем на 5 минут
-    await this.cacheManager.set(cacheKey, result, 300000);
+    await this.cacheManager.set(cacheKey, result, this.CACHE_TTL.CAMPAIGN);
 
     return result;
   }
 
   /**
-   * Дневная метрика
+   * ✅ ОПТИМИЗИРОВАНО: Дневная метрика с SQL агрегацией
+   * БЫЛО: findMany до 5000 записей + агрегация в JS
+   * СТАЛО: SQL GROUP BY DATE() - минимальная передача данных
    */
-  async getDailyMetrics(startDate?: string, endDate?: string, city?: string) {
+  async getDailyMetrics(startDate?: string, endDate?: string, city?: string, limit?: number) {
+    const startTime = Date.now();
+    
+    const cacheKey = this.buildCacheKey('daily-metrics', { startDate, endDate, city });
+    const cached = await this.cacheManager.get(cacheKey);
+    if (cached) {
+      this.logger.debug(`✅ getDailyMetrics from CACHE in ${Date.now() - startTime}ms`);
+      return cached;
+    }
+
     const now = new Date();
     const start = startDate ? new Date(startDate) : new Date(now.getFullYear(), now.getMonth(), 1);
     const end = endDate ? new Date(endDate) : now;
 
-    const where: any = {
-      createDate: {
-        gte: start,
-        lte: end,
-      },
-    };
+    // ✅ Параметризованный SQL запрос с агрегацией на стороне БД
+    const params: any[] = [start, end];
+    let paramIndex = 3;
+    let cityCondition = '';
 
     if (city) {
-      where.city = city;
+      cityCondition = ` AND city = $${paramIndex}`;
+      params.push(city);
     }
 
-    // Получаем заказы
-    const orders = await this.prisma.order.findMany({
-      where,
-      select: {
-        createDate: true,
-        statusOrder: true,
-        result: true,
-      },
-    });
-
-    // Группируем по дням
-    const dailyMap = new Map<string, any>();
-
-    orders.forEach((order) => {
-      const dateKey = order.createDate.toISOString().split('T')[0];
-
-      if (!dailyMap.has(dateKey)) {
-        dailyMap.set(dateKey, {
-          date: dateKey,
-          totalOrders: 0,
-          completedOrders: 0,
-          totalRevenue: 0,
-        });
-      }
-
-      const day = dailyMap.get(dateKey);
-      day.totalOrders++;
-
-      if (order.statusOrder === 'Закрыт') {
-        day.completedOrders++;
-        day.totalRevenue += Number(order.result || 0);
-      }
-    });
-
-    const dailyMetrics = Array.from(dailyMap.values()).sort((a, b) =>
-      a.date.localeCompare(b.date)
+    // ✅ SQL GROUP BY DATE() вместо загрузки всех записей
+    const dailyStats = await this.prisma.$queryRawUnsafe<Array<{
+      date: Date;
+      total_orders: bigint;
+      completed_orders: bigint;
+      total_revenue: number;
+    }>>(
+      `SELECT 
+        DATE(create_date) as date,
+        COUNT(*) as total_orders,
+        COUNT(*) FILTER (WHERE status_order = '${OrderStatus.COMPLETED}') as completed_orders,
+        COALESCE(SUM(result) FILTER (WHERE status_order = '${OrderStatus.COMPLETED}'), 0) as total_revenue
+      FROM orders
+      WHERE create_date >= $1 AND create_date <= $2 ${cityCondition}
+      GROUP BY DATE(create_date)
+      ORDER BY date ASC`,
+      ...params
     );
 
-    return {
+    // Преобразуем результат
+    const dailyMetrics = dailyStats.map(stat => ({
+      date: stat.date instanceof Date 
+        ? stat.date.toISOString().split('T')[0] 
+        : String(stat.date),
+      totalOrders: Number(stat.total_orders),
+      completedOrders: Number(stat.completed_orders),
+      totalRevenue: Number(stat.total_revenue) || 0,
+    }));
+
+    const duration = Date.now() - startTime;
+    this.logger.log(`✅ getDailyMetrics completed in ${duration}ms (${dailyMetrics.length} days, 1 SQL query)`);
+
+    const result = {
       success: true,
       data: dailyMetrics,
     };
+
+    await this.cacheManager.set(cacheKey, result, this.CACHE_TTL.DAILY);
+
+    return result;
   }
 
   /**
-   * ✅ ОПТИМИЗИРОВАНО: Dashboard - общая аналитика
-   * БЫЛО: 8 отдельных запросов
-   * СТАЛО: 3 запроса с группировкой
-   * УСКОРЕНИЕ: 3-5x + кеширование (100x для повторных запросов)
+   * ✅ ОПТИМИЗИРОВАНО: Dashboard
    */
   async getDashboardData(period: 'today' | 'week' | 'month' = 'today') {
     const startTime = Date.now();
 
-    // Проверяем кеш (dashboard обновляется очень часто - 30 секунд)
-    const cacheKey = `dashboard:${period}`;
+    const cacheKey = this.buildCacheKey('dashboard', { period });
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) {
-      this.logger.log(`✅ getDashboardData from CACHE in ${Date.now() - startTime}ms`);
+      this.logger.debug(`✅ getDashboardData from CACHE in ${Date.now() - startTime}ms`);
       return cached;
     }
     
@@ -452,9 +467,8 @@ export class AnalyticsService {
         break;
     }
 
-    // Используем группировку для уменьшения количества запросов
-    const [orderStats, callStats, activeOperators] = await Promise.all([
-      // 1. Группированная статистика заказов (1 запрос вместо 4)
+    // Транзакция для согласованности
+    const [orderStats, callStats, activeOperators] = await this.prisma.$transaction([
       this.prisma.order.groupBy({
         by: ['statusOrder'],
         where: {
@@ -463,8 +477,6 @@ export class AnalyticsService {
         _count: { id: true },
         _sum: { result: true },
       }),
-
-      // 2. Группированная статистика звонков (1 запрос вместо 3)
       this.prisma.call.groupBy({
         by: ['status'],
         where: {
@@ -473,26 +485,22 @@ export class AnalyticsService {
         _count: { id: true },
         _avg: { duration: true },
       }),
-
-      // 3. Активные операторы (1 запрос)
       this.prisma.callcentreOperator.count({ 
-        where: { statusWork: 'работает' } 
+        where: { statusWork: WorkStatus.ACTIVE } 
       }),
     ]);
 
-    // Собираем данные из группировок
     const totalOrders = orderStats.reduce((sum, s) => sum + s._count.id, 0);
-    const completedOrders = orderStats.find(s => s.statusOrder === 'Закрыт')?._count.id || 0;
+    const completedOrders = orderStats.find(s => s.statusOrder === OrderStatus.COMPLETED)?._count.id || 0;
     const inProgressOrders = orderStats
-      .filter(s => ['В работе', 'Назначен мастер', 'Мастер выехал'].includes(s.statusOrder))
+      .filter(s => IN_PROGRESS_STATUSES.includes(s.statusOrder as any))
       .reduce((sum, s) => sum + s._count.id, 0);
     
     const totalRevenue = orderStats.reduce((sum, s) => sum + Number(s._sum.result || 0), 0);
 
     const totalCalls = callStats.reduce((sum, s) => sum + s._count.id, 0);
-    const answeredCalls = callStats.find(s => s.status === 'answered')?._count.id || 0;
+    const answeredCalls = callStats.find(s => s.status === CallStatus.ANSWERED)?._count.id || 0;
     
-    // Взвешенная средняя длительность
     const avgCallDuration = callStats.reduce((sum, s) => {
       return sum + ((s._avg.duration || 0) * s._count.id);
     }, 0) / (totalCalls || 1);
@@ -502,7 +510,7 @@ export class AnalyticsService {
     const answerRate = totalCalls > 0 ? (answeredCalls / totalCalls) * 100 : 0;
 
     const duration = Date.now() - startTime;
-    this.logger.log(`✅ getDashboardData completed in ${duration}ms (${period}, 3 queries instead of 8)`);
+    this.logger.log(`✅ getDashboardData completed in ${duration}ms (${period}, 3 queries)`);
 
     const result = {
       success: true,
@@ -516,10 +524,7 @@ export class AnalyticsService {
         },
         revenue: {
           total: Math.round(totalRevenue),
-          avg:
-            completedOrders > 0
-              ? Math.round(totalRevenue / completedOrders)
-              : 0,
+          avg: completedOrders > 0 ? Math.round(totalRevenue / completedOrders) : 0,
         },
         calls: {
           total: totalCalls,
@@ -534,14 +539,13 @@ export class AnalyticsService {
       },
     };
 
-    // Кешируем на 30 секунд (dashboard обновляется часто)
-    await this.cacheManager.set(cacheKey, result, 30000);
+    await this.cacheManager.set(cacheKey, result, this.CACHE_TTL.DASHBOARD);
 
     return result;
   }
 
   /**
-   * Performance Metrics - детальные метрики производительности
+   * Performance Metrics с пагинацией
    */
   async getPerformanceMetrics(startDate?: string, endDate?: string) {
     const where: any = {};
@@ -559,28 +563,25 @@ export class AnalyticsService {
       if (endDate) callWhere.dateCreate.lte = new Date(endDate);
     }
 
+    // ✅ Транзакция для согласованности + лимиты
     const [
-      orders,
-      calls,
+      orderStats,
+      callStats,
       totalRevenue,
       totalExpenditure,
       avgTimeToComplete,
       avgTimeToAssignMaster,
-    ] = await Promise.all([
-      this.prisma.order.findMany({
+    ] = await this.prisma.$transaction([
+      this.prisma.order.groupBy({
+        by: ['statusOrder'],
         where,
-        select: {
-          statusOrder: true,
-          createDate: true,
-          closingData: true,
-        },
+        _count: { id: true },
       }),
-      this.prisma.call.findMany({
+      this.prisma.call.groupBy({
+        by: ['status'],
         where: callWhere,
-        select: {
-          status: true,
-          duration: true,
-        },
+        _count: { id: true },
+        _avg: { duration: true },
       }),
       this.prisma.order.aggregate({
         where: { ...where, result: { not: null } },
@@ -593,13 +594,14 @@ export class AnalyticsService {
       this.prisma.order.findMany({
         where: {
           ...where,
-          statusOrder: 'Закрыт',
+          statusOrder: OrderStatus.COMPLETED,
           closingData: { not: null },
         },
         select: {
           createDate: true,
           closingData: true,
         },
+        take: this.MAX_LIMIT,
       }),
       this.prisma.order.findMany({
         where: {
@@ -610,35 +612,36 @@ export class AnalyticsService {
           createDate: true,
           dateMeeting: true,
         },
+        take: this.MAX_LIMIT,
       }),
     ]);
 
     // Вычисляем метрики
-    const totalOrders = orders.length;
-    const completedOrders = orders.filter((o) => o.statusOrder === 'Закрыт').length;
-    const cancelledOrders = orders.filter((o) => o.statusOrder === 'Отменен').length;
+    const totalOrders = orderStats.reduce((sum, s) => sum + s._count.id, 0);
+    const completedOrders = orderStats.find(o => o.statusOrder === OrderStatus.COMPLETED)?._count.id || 0;
+    const cancelledOrders = orderStats.find(o => o.statusOrder === OrderStatus.CANCELLED)?._count.id || 0;
 
-    const totalCalls = calls.length;
-    const answeredCalls = calls.filter((c) => c.status === 'answered').length;
-    const missedCalls = calls.filter((c) => c.status === 'missed').length;
+    const totalCalls = callStats.reduce((sum, s) => sum + s._count.id, 0);
+    const answeredCalls = callStats.find(c => c.status === CallStatus.ANSWERED)?._count.id || 0;
+    const missedCalls = callStats.find(c => c.status === CallStatus.MISSED)?._count.id || 0;
 
     // Среднее время закрытия заказа (в часах)
     const completionTimes = avgTimeToComplete
       .map((o) => {
         if (o.closingData && o.createDate) {
-          const closingDate = o.closingData ? new Date(o.closingData) : null;
-          return closingDate ? (closingDate.getTime() - o.createDate.getTime()) / (1000 * 60 * 60) : 0;
+          const closingDate = new Date(o.closingData);
+          return (closingDate.getTime() - o.createDate.getTime()) / (1000 * 60 * 60);
         }
         return null;
       })
-      .filter((t) => t !== null);
+      .filter((t): t is number => t !== null && t > 0);
 
     const avgCompletionTime =
       completionTimes.length > 0
         ? completionTimes.reduce((a, b) => a + b, 0) / completionTimes.length
         : 0;
 
-    // Среднее время назначения мастера (в часах)
+    // Среднее время назначения мастера
     const assignTimes = avgTimeToAssignMaster
       .map((o) => {
         if (o.dateMeeting && o.createDate) {
@@ -647,7 +650,7 @@ export class AnalyticsService {
         }
         return null;
       })
-      .filter((t) => t !== null);
+      .filter((t): t is number => t !== null && t > 0);
 
     const avgAssignTime =
       assignTimes.length > 0 ? assignTimes.reduce((a, b) => a + b, 0) / assignTimes.length : 0;
@@ -664,15 +667,15 @@ export class AnalyticsService {
           total: totalOrders,
           completed: completedOrders,
           cancelled: cancelledOrders,
-          completionRate: totalOrders > 0 ? (completedOrders / totalOrders) * 100 : 0,
-          cancellationRate: totalOrders > 0 ? (cancelledOrders / totalOrders) * 100 : 0,
+          completionRate: totalOrders > 0 ? Math.round((completedOrders / totalOrders) * 100 * 100) / 100 : 0,
+          cancellationRate: totalOrders > 0 ? Math.round((cancelledOrders / totalOrders) * 100 * 100) / 100 : 0,
         },
         calls: {
           total: totalCalls,
           answered: answeredCalls,
           missed: missedCalls,
-          answerRate: totalCalls > 0 ? (answeredCalls / totalCalls) * 100 : 0,
-          missRate: totalCalls > 0 ? (missedCalls / totalCalls) * 100 : 0,
+          answerRate: totalCalls > 0 ? Math.round((answeredCalls / totalCalls) * 100 * 100) / 100 : 0,
+          missRate: totalCalls > 0 ? Math.round((missedCalls / totalCalls) * 100 * 100) / 100 : 0,
         },
         timing: {
           avgCompletionTime: Math.round(avgCompletionTime * 10) / 10,
@@ -685,11 +688,10 @@ export class AnalyticsService {
           profitMargin: Math.round(profitMargin * 100) / 100,
         },
         conversion: {
-          callToOrder: answeredCalls > 0 ? (totalOrders / answeredCalls) * 100 : 0,
-          orderToCompletion: totalOrders > 0 ? (completedOrders / totalOrders) * 100 : 0,
+          callToOrder: answeredCalls > 0 ? Math.round((totalOrders / answeredCalls) * 100 * 100) / 100 : 0,
+          orderToCompletion: totalOrders > 0 ? Math.round((completedOrders / totalOrders) * 100 * 100) / 100 : 0,
         },
       },
     };
   }
 }
-

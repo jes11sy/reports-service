@@ -23,11 +23,11 @@
     "@nestjs/passport": "^10.0.3",
     "@nestjs/swagger": "^7.4.0",
     "@nestjs/cache-manager": "^2.2.2",
-    "@prisma/client": "^5.19.0",
+    "@nestjs/throttler": "^5.2.0",
+    "@prisma/client": "^5.22.0",
     "@fastify/helmet": "^11.1.1",
     "@fastify/cors": "^9.0.1",
     "@fastify/cookie": "^9.3.1",
-    "@fastify/static": "^7.0.4",
     "@fastify/compress": "^7.0.3",
     "@willsoto/nestjs-prometheus": "^6.0.1",
     "prom-client": "^15.1.0",
@@ -37,7 +37,6 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "exceljs": "^4.4.0",
-    "dompurify": "^3.1.6",
     "isomorphic-dompurify": "^2.15.0",
     "cache-manager": "^5.4.0",
     "cache-manager-redis-yet": "^4.1.2",
@@ -49,8 +48,7 @@
     "@nestjs/schematics": "^10.1.2",
     "@types/node": "^20.14.10",
     "@types/passport-jwt": "^4.0.1",
-    "@types/dompurify": "^3.0.5",
-    "prisma": "^5.19.0",
+    "prisma": "^5.22.0",
     "typescript": "^5.5.3"
   }
 }

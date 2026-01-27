@@ -49,7 +49,8 @@ model Order {
   partner              Boolean?     @default(false)
   partnerPercent       Decimal?     @map("partner_percent") @db.Decimal(5, 2)
   
-  master               Master?     @relation(fields: [masterId], references: [id])
+  // ✅ FIX #146: SetNull - заказ остаётся, мастер открепляется
+  master               Master?     @relation(fields: [masterId], references: [id], onDelete: SetNull)
   
   @@index([statusOrder, city])
   @@index([closingData])

@@ -1,11 +1,14 @@
 import { Injectable, CanActivate, ExecutionContext, SetMetadata, Logger, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 
+// ✅ FIX #83: Унифицированный enum ролей
 export enum UserRole {
+  ADMIN = 'admin',
   MASTER = 'master',
   DIRECTOR = 'director',
-  CALLCENTRE_ADMIN = 'admin',
-  CALLCENTRE_OPERATOR = 'operator',
+  CALLCENTRE_ADMIN = 'callcentre_admin',
+  CALLCENTRE_OPERATOR = 'callcentre_operator',
+  OPERATOR = 'operator',
 }
 
 export const Roles = (...roles: UserRole[]) => SetMetadata('roles', roles);

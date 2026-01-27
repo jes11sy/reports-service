@@ -1,5 +1,6 @@
 import { Controller, Get, Query, UseGuards, HttpCode, HttpStatus, Request, Param } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { StatsService } from './stats.service';
 import { RolesGuard, Roles, UserRole } from '../auth/roles.guard';
 import { CookieJwtAuthGuard } from '../auth/guards/cookie-jwt-auth.guard';
@@ -11,6 +12,7 @@ export class StatsController {
 
   @Get('health')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 60, ttl: 60000 } }) // Защита от DDoS
   @ApiOperation({ summary: 'Health check endpoint' })
   async health() {
     return {
@@ -26,6 +28,7 @@ export class StatsController {
   @ApiBearerAuth()
   @Roles(UserRole.CALLCENTRE_OPERATOR)
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить личную статистику оператора' })
   @ApiQuery({ name: 'startDate', required: false, type: String, example: '2024-01-01' })
   @ApiQuery({ name: 'endDate', required: false, type: String, example: '2024-12-31' })
@@ -44,6 +47,7 @@ export class StatsController {
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить статистику оператора' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
@@ -61,6 +65,7 @@ export class StatsController {
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить общую статистику' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
@@ -77,6 +82,7 @@ export class StatsController {
   @ApiBearerAuth()
   @Roles(UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить статистику для дашборда админки' })
   async getDashboardStats() {
     const stats = await this.statsService.getDashboardStats();
@@ -86,4 +92,3 @@ export class StatsController {
     };
   }
 }
-

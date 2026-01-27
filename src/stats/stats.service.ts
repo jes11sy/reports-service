@@ -1,16 +1,63 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Inject } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  OrderStatus,
+  CallStatus,
+  CashOperationType,
+  MISSED_CALL_STATUSES,
+} from '../common/constants/order-statuses';
 
 @Injectable()
 export class StatsService {
   private readonly logger = new Logger(StatsService.name);
 
-  constructor(private prisma: PrismaService) {}
+  // Лимиты из конфигурации
+  private readonly DEFAULT_LIMIT: number;
+
+  // ✅ FIX: TTL кеширования для разных типов запросов
+  private readonly CACHE_TTL = {
+    OPERATOR: 60000,    // 1 минута для статистики оператора
+    OVERALL: 120000,    // 2 минуты для общей статистики
+    DASHBOARD: 30000,   // 30 секунд для дашборда (часто обновляется)
+  };
+
+  constructor(
+    private prisma: PrismaService,
+    private configService: ConfigService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+  ) {
+    this.DEFAULT_LIMIT = this.configService.get<number>('STATS_DEFAULT_LIMIT', 1000);
+  }
 
   /**
-   * Получить статистику оператора
+   * ✅ Ключ кеша
+   */
+  private buildCacheKey(prefix: string, params: Record<string, any>): string {
+    const sortedParams = Object.keys(params)
+      .sort()
+      .filter(key => params[key] !== undefined && params[key] !== null)
+      .map(key => `${key}:${params[key]}`)
+      .join('|');
+    return `stats:${prefix}:${sortedParams || 'all'}`;
+  }
+
+  /**
+   * ✅ ОПТИМИЗИРОВАНО: Получить статистику оператора с кешированием
    */
   async getOperatorStats(operatorId: number, startDate?: string, endDate?: string) {
+    const startTime = Date.now();
+
+    // ✅ Проверяем кеш
+    const cacheKey = this.buildCacheKey('operator', { operatorId, startDate, endDate });
+    const cached = await this.cacheManager.get(cacheKey);
+    if (cached) {
+      this.logger.debug(`✅ getOperatorStats from CACHE in ${Date.now() - startTime}ms`);
+      return cached;
+    }
+
     // Проверяем существование оператора
     const operator = await this.prisma.callcentreOperator.findUnique({
       where: { id: operatorId },
@@ -46,100 +93,96 @@ export class StatsService {
       },
     };
 
-    // Оптимизированная статистика звонков
-    const callsStats = await this.prisma.call.groupBy({
-      by: ['status'],
-      where: callWhere,
-      _count: {
-        id: true,
-      },
-    });
+    // ✅ Транзакция для согласованности
+    const [
+      callsStats,
+      avgCallDuration,
+      ordersStats,
+      ordersByStatus,
+      dailyStats,
+      cityStats,
+      rkStats,
+      totalRevenue,
+    ] = await this.prisma.$transaction([
+      // Оптимизированная статистика звонков
+      this.prisma.call.groupBy({
+        by: ['status'],
+        where: callWhere,
+        _count: { id: true },
+      }),
+      // Средняя длительность звонков
+      this.prisma.call.aggregate({
+        where: { ...callWhere, duration: { not: null } },
+        _avg: { duration: true },
+      }),
+      // Статистика заказов
+      this.prisma.order.aggregate({
+        where: orderWhere,
+        _count: { id: true },
+      }),
+      // Заказы по статусам
+      this.prisma.order.groupBy({
+        by: ['statusOrder'],
+        where: orderWhere,
+        _count: { id: true },
+      }),
+      // Статистика по дням (последние 7 дней)
+      this.prisma.call.groupBy({
+        by: ['dateCreate'],
+        where: {
+          operatorId,
+          status: CallStatus.ANSWERED,
+          dateCreate: {
+            gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+            lte: end,
+          },
+        },
+        _count: { id: true },
+        orderBy: { dateCreate: 'asc' },
+      }),
+      // Статистика по городам
+      this.prisma.call.groupBy({
+        by: ['city'],
+        where: {
+          ...callWhere,
+          status: CallStatus.ANSWERED,
+        },
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+      }),
+      // Статистика по РК
+      this.prisma.call.groupBy({
+        by: ['rk'],
+        where: {
+          ...callWhere,
+          status: CallStatus.ANSWERED,
+        },
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+      }),
+      // Выручка
+      this.prisma.order.aggregate({
+        where: { ...orderWhere, result: { not: null } },
+        _sum: { result: true },
+      }),
+    ]);
 
     const acceptedCalls = callsStats
-      .filter(stat => stat.status === 'answered')
+      .filter(stat => stat.status === CallStatus.ANSWERED)
       .reduce((sum, stat) => sum + stat._count.id, 0);
+    
     const missedCalls = callsStats
-      .filter(stat => ['missed', 'no_answer', 'busy'].includes(stat.status))
+      .filter(stat => MISSED_CALL_STATUSES.includes(stat.status as any))
       .reduce((sum, stat) => sum + stat._count.id, 0);
     
-    // Всего звонков = принятые + пропущенные
     const totalCalls = acceptedCalls + missedCalls;
-
-    // Средняя длительность звонков
-    const avgCallDuration = await this.prisma.call.aggregate({
-      where: { ...callWhere, duration: { not: null } },
-      _avg: { duration: true },
-    });
-
-    // Статистика заказов
-    const ordersStats = await this.prisma.order.aggregate({
-      where: orderWhere,
-      _count: { id: true },
-    });
-
-    // Заказы по статусам
-    const ordersByStatus = await this.prisma.order.groupBy({
-      by: ['statusOrder'],
-      where: orderWhere,
-      _count: { id: true },
-    });
-
-    // Статистика по дням (только принятые звонки за последние 7 дней)
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    
-    const dailyStats = await this.prisma.call.groupBy({
-      by: ['dateCreate'],
-      where: {
-        operatorId,
-        status: 'answered',
-        dateCreate: {
-          gte: sevenDaysAgo,
-          lte: end,
-        },
-      },
-      _count: { id: true },
-      orderBy: { dateCreate: 'asc' },
-    });
 
     const dailyStatsFormatted = dailyStats.map(stat => ({
       date: stat.dateCreate.toISOString().split('T')[0],
       calls: stat._count?.id || 0,
     }));
 
-    // Статистика по городам (только принятые звонки)
-    const cityStats = await this.prisma.call.groupBy({
-      by: ['city'],
-      where: {
-        ...callWhere,
-        status: 'answered',
-      },
-      _count: { id: true },
-      orderBy: {
-        _count: { id: 'desc' },
-      },
-    });
-
-    // Статистика по РК (только принятые звонки)
-    const rkStats = await this.prisma.call.groupBy({
-      by: ['rk'],
-      where: {
-        ...callWhere,
-        status: 'answered',
-      },
-      _count: { id: true },
-      orderBy: {
-        _count: { id: 'desc' },
-      },
-    });
-
-    // Выручка
-    const totalRevenue = await this.prisma.order.aggregate({
-      where: { ...orderWhere, result: { not: null } },
-      _sum: { result: true },
-    });
-
-    const completedOrders = ordersByStatus.find(s => s.statusOrder === 'Закрыт')?._count.id || 0;
+    const completedOrders = ordersByStatus.find(s => s.statusOrder === OrderStatus.COMPLETED)?._count.id || 0;
     const revenueSum = totalRevenue._sum.result ? Number(totalRevenue._sum.result) : 0;
 
     const response = {
@@ -154,14 +197,14 @@ export class StatsService {
         endDate: end.toISOString(),
       },
       calls: {
-        total: totalCalls,  // принятые + пропущенные
-        accepted: acceptedCalls,  // принятые
-        missed: missedCalls,  // пропущенные
+        total: totalCalls,
+        accepted: acceptedCalls,
+        missed: missedCalls,
         acceptanceRate: totalCalls > 0 ? Math.round((acceptedCalls / totalCalls) * 100) : 0,
         avgDuration: Math.round(avgCallDuration._avg.duration || 0),
       },
       orders: {
-        total: ordersStats._count.id,  // созданные заказы данным оператором
+        total: ordersStats._count.id,
         byStatus: ordersByStatus.reduce((acc, item) => {
           acc[item.statusOrder] = item._count.id;
           return acc;
@@ -178,20 +221,34 @@ export class StatsService {
       })),
     };
 
-    this.logger.log(`Статистика оператора ${operator.name} получена`, {
+    const duration = Date.now() - startTime;
+    this.logger.log(`✅ getOperatorStats completed in ${duration}ms`, {
       operatorId,
       period: `${start.toISOString()} - ${end.toISOString()}`,
       calls: response.calls.total,
       orders: response.orders.total,
     });
 
+    // ✅ Кешируем результат
+    await this.cacheManager.set(cacheKey, response, this.CACHE_TTL.OPERATOR);
+
     return response;
   }
 
   /**
-   * Получить общую статистику
+   * ✅ ОПТИМИЗИРОВАНО: Получить общую статистику с кешированием
    */
   async getOverallStats(startDate?: string, endDate?: string) {
+    const startTime = Date.now();
+
+    // ✅ Проверяем кеш
+    const cacheKey = this.buildCacheKey('overall', { startDate, endDate });
+    const cached = await this.cacheManager.get(cacheKey);
+    if (cached) {
+      this.logger.debug(`✅ getOverallStats from CACHE in ${Date.now() - startTime}ms`);
+      return cached;
+    }
+
     const start = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const end = endDate ? new Date(endDate + 'T23:59:59.999Z') : new Date();
 
@@ -209,67 +266,58 @@ export class StatsService {
       },
     };
 
-    // Общая статистика звонков
-    const totalCalls = await this.prisma.call.count({ where: callWhere });
-    const acceptedCalls = await this.prisma.call.count({
-      where: { ...callWhere, status: 'answered' },
-    });
-    const missedCalls = await this.prisma.call.count({
-      where: {
-        ...callWhere,
-        status: { in: ['missed', 'no_answer', 'busy'] },
-      },
-    });
-
-    // Общая статистика заказов
-    const totalOrders = await this.prisma.order.count({ where: orderWhere });
-
-    // Статистика по операторам
-    const operatorStats = await this.prisma.call.groupBy({
-      by: ['operatorId'],
-      where: callWhere,
-      _count: { id: true },
-      orderBy: {
-        _count: { id: 'desc' },
-      },
-    });
+    // ✅ Транзакция для согласованности
+    const [
+      totalCalls,
+      acceptedCalls,
+      missedCalls,
+      totalOrders,
+      operatorStats,
+      cityStats,
+      rkStats,
+    ] = await this.prisma.$transaction([
+      this.prisma.call.count({ where: callWhere }),
+      this.prisma.call.count({
+        where: { ...callWhere, status: CallStatus.ANSWERED },
+      }),
+      this.prisma.call.count({
+        where: {
+          ...callWhere,
+          status: { in: MISSED_CALL_STATUSES },
+        },
+      }),
+      this.prisma.order.count({ where: orderWhere }),
+      this.prisma.call.groupBy({
+        by: ['operatorId'],
+        where: callWhere,
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+      }),
+      this.prisma.call.groupBy({
+        by: ['city'],
+        where: callWhere,
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+      }),
+      this.prisma.call.groupBy({
+        by: ['rk'],
+        where: callWhere,
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+      }),
+    ]);
 
     // Получаем имена операторов
     const operatorIds = operatorStats.map(stat => stat.operatorId);
     const operators = await this.prisma.callcentreOperator.findMany({
-      where: {
-        id: { in: operatorIds },
-      },
-      select: {
-        id: true,
-        name: true,
-      },
+      where: { id: { in: operatorIds } },
+      select: { id: true, name: true },
     });
 
     const operatorMap = operators.reduce((acc, op) => {
       acc[op.id] = op.name;
       return acc;
     }, {} as Record<number, string>);
-
-    // Статистика по городам
-    const cityStats = await this.prisma.call.groupBy({
-      by: ['city'],
-      where: callWhere,
-      _count: { id: true },
-      orderBy: {
-        _count: { id: 'desc' },
-      },
-    });
-
-    // Статистика по РК
-    const rkStats = await this.prisma.call.groupBy({
-      by: ['rk'],
-      where: callWhere,
-      _count: { id: true },
-      orderBy: {
-        _count: { id: 'desc' },
-      },
-    });
 
     const response = {
       period: {
@@ -299,115 +347,110 @@ export class StatsService {
       })),
     };
 
-    this.logger.log('Общая статистика получена', {
+    const duration = Date.now() - startTime;
+    this.logger.log(`✅ getOverallStats completed in ${duration}ms`, {
       period: `${start.toISOString()} - ${end.toISOString()}`,
       calls: response.calls.total,
       orders: response.orders.total,
     });
 
+    // ✅ Кешируем результат
+    await this.cacheManager.set(cacheKey, response, this.CACHE_TTL.OVERALL);
+
     return response;
   }
 
   /**
-   * Получить статистику для главного дашборда админки
-   * Данные показываются только за текущий месяц
+   * ✅ ОПТИМИЗИРОВАНО: Статистика для дашборда с кешированием
    */
   async getDashboardStats() {
+    const startTime = Date.now();
+
+    // ✅ Проверяем кеш
+    const cacheKey = 'stats:dashboard:current-month';
+    const cached = await this.cacheManager.get(cacheKey);
+    if (cached) {
+      this.logger.debug(`✅ getDashboardStats from CACHE in ${Date.now() - startTime}ms`);
+      return cached;
+    }
+
     // Определяем границы текущего месяца
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
-    // Получаем количество сотрудников по типам (не зависит от периода)
-    const [callCenterEmployees, directors, masters] = await Promise.all([
+    // ✅ Транзакция для согласованности
+    const [
+      callCenterEmployees,
+      directors,
+      masters,
+      orders,
+      notOrders,
+      cancellations,
+      completedInMoney,
+      revenueSum,
+      incomeSum,
+      expenseSum,
+    ] = await this.prisma.$transaction([
+      // Сотрудники
       this.prisma.callcentreOperator.count({
-        where: { status: 'active' } // У операторов - status, а не statusWork!
+        where: { status: 'active' }
       }),
-      this.prisma.director.count(), // У директоров нет поля statusWork
+      this.prisma.director.count(),
       this.prisma.master.count({
-        where: { statusWork: 'работает' } // У мастеров - statusWork!
-      })
-    ]);
-
-    // Фильтр по дате создания для текущего месяца
-    const dateFilter = {
-      gte: startOfMonth,
-      lte: endOfMonth
-    };
-
-    // Получаем количество заказов за текущий месяц
-    const orders = await this.prisma.order.count({
-      where: {
-        createDate: dateFilter
-      }
-    });
-
-    // Незаказы - статус "Незаказ"
-    const notOrders = await this.prisma.order.count({
-      where: {
-        createDate: dateFilter,
-        statusOrder: 'Незаказ'
-      }
-    });
-
-    // Отмены - статус "Отказ"
-    const cancellations = await this.prisma.order.count({
-      where: {
-        createDate: dateFilter,
-        statusOrder: 'Отказ'
-      }
-    });
-
-    // Выполненных в деньги - статус "Готово" или "Отказ" с result > 0
-    const completedInMoney = await this.prisma.order.count({
-      where: {
-        createDate: dateFilter,
-        statusOrder: { in: ['Готово', 'Отказ'] },
-        result: { gt: 0 }
-      }
-    });
-
-    // Оборот - сумма "чистыми" (clean) по закрытым заказам за текущий месяц
-    const revenueSum = await this.prisma.order.aggregate({
-      where: {
-        statusOrder: 'Готово',
-        clean: { not: null },
-        closingData: {
-          gte: startOfMonth,
-          lte: endOfMonth
+        where: { statusWork: 'работает' }
+      }),
+      // Заказы
+      this.prisma.order.count({
+        where: { createDate: { gte: startOfMonth, lte: endOfMonth } }
+      }),
+      this.prisma.order.count({
+        where: {
+          createDate: { gte: startOfMonth, lte: endOfMonth },
+          statusOrder: OrderStatus.NOT_ORDER
         }
-      },
-      _sum: {
-        clean: true
-      }
-    });
+      }),
+      this.prisma.order.count({
+        where: {
+          createDate: { gte: startOfMonth, lte: endOfMonth },
+          statusOrder: OrderStatus.CANCELLED
+        }
+      }),
+      this.prisma.order.count({
+        where: {
+          createDate: { gte: startOfMonth, lte: endOfMonth },
+          statusOrder: { in: [OrderStatus.COMPLETED, OrderStatus.CANCELLED] },
+          result: { gt: 0 }
+        }
+      }),
+      // Оборот
+      this.prisma.order.aggregate({
+        where: {
+          statusOrder: OrderStatus.COMPLETED,
+          clean: { not: null },
+          closingData: { gte: startOfMonth, lte: endOfMonth }
+        },
+        _sum: { clean: true }
+      }),
+      // Касса - приход
+      this.prisma.cash.aggregate({
+        where: {
+          name: CashOperationType.INCOME,
+          dateCreate: { gte: startOfMonth, lte: endOfMonth }
+        },
+        _sum: { amount: true }
+      }),
+      // Касса - расход
+      this.prisma.cash.aggregate({
+        where: {
+          name: CashOperationType.EXPENSE,
+          dateCreate: { gte: startOfMonth, lte: endOfMonth }
+        },
+        _sum: { amount: true }
+      }),
+    ]);
 
     const revenue = revenueSum._sum.clean ? Number(revenueSum._sum.clean) : 0;
-
-    // Прибыль и расходы из таблицы Cash за текущий месяц
-    const [incomeSum, expenseSum] = await Promise.all([
-      this.prisma.cash.aggregate({
-        where: {
-          name: 'приход',
-          dateCreate: {
-            gte: startOfMonth,
-            lte: endOfMonth
-          }
-        },
-        _sum: { amount: true }
-      }),
-      this.prisma.cash.aggregate({
-        where: {
-          name: 'расход',
-          dateCreate: {
-            gte: startOfMonth,
-            lte: endOfMonth
-          }
-        },
-        _sum: { amount: true }
-      })
-    ]);
-
     const profit = incomeSum._sum.amount ? Number(incomeSum._sum.amount) : 0;
     const expenses = expenseSum._sum.amount ? Number(expenseSum._sum.amount) : 0;
 
@@ -418,9 +461,9 @@ export class StatsService {
         masters: masters
       },
       orders: orders,
-      notOrders: notOrders,           // Незаказы
-      cancellations: cancellations,   // Отмены (Отказ)
-      completedInMoney: completedInMoney, // Выполненных в деньги
+      notOrders: notOrders,
+      cancellations: cancellations,
+      completedInMoney: completedInMoney,
       finance: {
         revenue: Math.round(revenue),
         profit: Math.round(profit),
@@ -428,15 +471,17 @@ export class StatsService {
       }
     };
 
-    this.logger.log('Статистика дашборда получена за текущий месяц', {
+    const duration = Date.now() - startTime;
+    this.logger.log(`✅ getDashboardStats completed in ${duration}ms`, {
       period: `${startOfMonth.toISOString()} - ${endOfMonth.toISOString()}`,
       employees: response.employees,
       orders: response.orders,
       finance: response.finance
     });
 
+    // ✅ Кешируем результат (короткий TTL для дашборда)
+    await this.cacheManager.set(cacheKey, response, this.CACHE_TTL.DASHBOARD);
+
     return response;
   }
 }
-
-

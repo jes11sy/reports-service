@@ -1,5 +1,6 @@
 import { Controller, Get, Query, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { CookieJwtAuthGuard } from '../auth/guards/cookie-jwt-auth.guard';
 import { AnalyticsService } from './analytics.service';
 import { RolesGuard, Roles, UserRole } from '../auth/roles.guard';
@@ -15,6 +16,7 @@ export class AnalyticsController {
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить статистику операторов' })
   async getOperatorStatistics(@Query() query: AnalyticsQueryDto) {
     return this.analyticsService.getOperatorStatistics(
@@ -29,6 +31,7 @@ export class AnalyticsController {
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить аналитику по городам' })
   async getCityAnalytics(@Query() query: AnalyticsQueryDto) {
     return this.analyticsService.getCityAnalytics(query.startDate, query.endDate);
@@ -39,6 +42,7 @@ export class AnalyticsController {
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить аналитику по рекламным кампаниям (РК)' })
   async getCampaignAnalytics(@Query() query: AnalyticsQueryDto) {
     return this.analyticsService.getCampaignAnalytics(query.startDate, query.endDate);
@@ -49,6 +53,7 @@ export class AnalyticsController {
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить дневную метрику' })
   async getDailyMetrics(@Query() query: AnalyticsQueryDto) {
     return this.analyticsService.getDailyMetrics(query.startDate, query.endDate, query.city);
@@ -59,6 +64,7 @@ export class AnalyticsController {
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN, UserRole.CALLCENTRE_OPERATOR)
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 60, ttl: 60000 } }) // Dashboard часто обновляется
   @ApiOperation({ summary: 'Получить данные для дашборда' })
   async getDashboardData(@Query() query: DashboardQueryDto) {
     return this.analyticsService.getDashboardData(query.period || 'today');
@@ -69,9 +75,9 @@ export class AnalyticsController {
   @ApiBearerAuth()
   @Roles(UserRole.DIRECTOR)
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60000 } }) // Тяжёлый запрос
   @ApiOperation({ summary: 'Получить метрики производительности' })
   async getPerformanceMetrics(@Query() query: AnalyticsQueryDto) {
     return this.analyticsService.getPerformanceMetrics(query.startDate, query.endDate);
   }
 }
-

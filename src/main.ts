@@ -7,6 +7,9 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { AuditLogInterceptor } from './common/interceptors/audit-log.interceptor';
 
+// Re-export для обратной совместимости
+export { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+
 async function bootstrap() {
   // Проверка критичных переменных окружения
   if (!process.env.JWT_SECRET) {
@@ -23,6 +26,13 @@ async function bootstrap() {
     logger.warn('⚠️  Ensure HTTPS is enabled in production environment');
   }
 
+  const isProduction = process.env.NODE_ENV === 'production';
+  
+  // ✅ FIX #86: Фильтрация уровней логов в production
+  const logLevels: ('log' | 'error' | 'warn' | 'debug' | 'verbose')[] = isProduction
+    ? ['log', 'error', 'warn']
+    : ['log', 'error', 'warn', 'debug', 'verbose'];
+
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     new FastifyAdapter({ 
@@ -30,6 +40,9 @@ async function bootstrap() {
       trustProxy: true,
       bodyLimit: 10485760, // 10MB limit
     }),
+    {
+      logger: logLevels, // ✅ FIX #86: Применяем фильтрацию логов
+    },
   );
 
   const logger = new Logger('ReportsService');
