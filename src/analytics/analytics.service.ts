@@ -302,13 +302,15 @@ export class AnalyticsService {
       }
     }
 
-    const [campaignStats, totalCalls, answeredCalls] = await this.prisma.$transaction([
-      this.prisma.order.groupBy({
-        by: ['rk', 'statusOrder'],
-        where: orderDateFilter,
-        _count: { id: true },
-        _sum: { result: true },
-      }),
+    // groupBy вынесен из $transaction из-за ограничений типизации Prisma
+    const campaignStats = await this.prisma.order.groupBy({
+      by: ['rk', 'statusOrder'],
+      where: orderDateFilter,
+      _count: { id: true },
+      _sum: { result: true },
+    });
+
+    const [totalCalls, answeredCalls] = await Promise.all([
       this.prisma.call.count({
         where: callDateFilter.dateCreate ? { dateCreate: callDateFilter.dateCreate } : {},
       }),
@@ -564,15 +566,8 @@ export class AnalyticsService {
       if (endDate) callWhere.dateCreate.lte = new Date(endDate);
     }
 
-    // ✅ Транзакция для согласованности + лимиты
-    const [
-      orderStats,
-      callStats,
-      totalRevenue,
-      totalExpenditure,
-      avgTimeToComplete,
-      avgTimeToAssignMaster,
-    ] = await this.prisma.$transaction([
+    // groupBy вынесен отдельно из-за ограничений типизации Prisma
+    const [orderStats, callStats] = await Promise.all([
       this.prisma.order.groupBy({
         by: ['statusOrder'],
         where,
@@ -584,6 +579,14 @@ export class AnalyticsService {
         _count: { id: true },
         _avg: { duration: true },
       }),
+    ]);
+
+    const [
+      totalRevenue,
+      totalExpenditure,
+      avgTimeToComplete,
+      avgTimeToAssignMaster,
+    ] = await Promise.all([
       this.prisma.order.aggregate({
         where: { ...where, result: { not: null } },
         _sum: { result: true },
