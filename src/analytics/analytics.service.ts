@@ -206,14 +206,15 @@ export class AnalyticsService {
       }
     }
 
-    // Группированная статистика
-    const [orderStats, totalCalls, answeredCalls] = await this.prisma.$transaction([
-      this.prisma.order.groupBy({
-        by: ['city', 'statusOrder'],
-        where: orderDateFilter,
-        _count: { id: true },
-        _sum: { result: true },
-      }),
+    // Группированная статистика (groupBy вынесен из $transaction из-за ограничений типизации Prisma)
+    const orderStats = await this.prisma.order.groupBy({
+      by: ['city', 'statusOrder'],
+      where: orderDateFilter,
+      _count: { id: true },
+      _sum: { result: true },
+    });
+
+    const [totalCalls, answeredCalls] = await Promise.all([
       this.prisma.call.count({
         where: callDateFilter.dateCreate ? { dateCreate: callDateFilter.dateCreate } : {},
       }),
@@ -467,8 +468,8 @@ export class AnalyticsService {
         break;
     }
 
-    // Транзакция для согласованности
-    const [orderStats, callStats, activeOperators] = await this.prisma.$transaction([
+    // Параллельные запросы (groupBy вынесен из $transaction из-за ограничений типизации Prisma)
+    const [orderStats, callStats, activeOperators] = await Promise.all([
       this.prisma.order.groupBy({
         by: ['statusOrder'],
         where: {
