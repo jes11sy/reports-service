@@ -258,27 +258,8 @@ export class StatsService {
       },
     };
 
-    // ✅ Транзакция для согласованности
-    const [
-      totalCalls,
-      acceptedCalls,
-      missedCalls,
-      totalOrders,
-      operatorStats,
-      cityStats,
-      rkStats,
-    ] = await this.prisma.$transaction([
-      this.prisma.call.count({ where: callWhere }),
-      this.prisma.call.count({
-        where: { ...callWhere, status: CallStatus.ANSWERED },
-      }),
-      this.prisma.call.count({
-        where: {
-          ...callWhere,
-          status: { in: MISSED_CALL_STATUSES },
-        },
-      }),
-      this.prisma.order.count({ where: orderWhere }),
+    // groupBy запросы вынесены из $transaction из-за ограничений типизации Prisma
+    const [operatorStats, cityStats, rkStats] = await Promise.all([
       this.prisma.call.groupBy({
         by: ['operatorId'],
         where: callWhere,
@@ -297,6 +278,20 @@ export class StatsService {
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
       }),
+    ]);
+
+    const [totalCalls, acceptedCalls, missedCalls, totalOrders] = await Promise.all([
+      this.prisma.call.count({ where: callWhere }),
+      this.prisma.call.count({
+        where: { ...callWhere, status: CallStatus.ANSWERED },
+      }),
+      this.prisma.call.count({
+        where: {
+          ...callWhere,
+          status: { in: MISSED_CALL_STATUSES },
+        },
+      }),
+      this.prisma.order.count({ where: orderWhere }),
     ]);
 
     // Получаем имена операторов
