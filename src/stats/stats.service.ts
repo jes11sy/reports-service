@@ -93,40 +93,24 @@ export class StatsService {
       },
     };
 
-    // ✅ Транзакция для согласованности
+    // groupBy запросы вынесены из $transaction из-за ограничений типизации Prisma
     const [
       callsStats,
-      avgCallDuration,
-      ordersStats,
       ordersByStatus,
       dailyStats,
       cityStats,
       rkStats,
-      totalRevenue,
-    ] = await this.prisma.$transaction([
-      // Оптимизированная статистика звонков
+    ] = await Promise.all([
       this.prisma.call.groupBy({
         by: ['status'],
         where: callWhere,
         _count: { id: true },
       }),
-      // Средняя длительность звонков
-      this.prisma.call.aggregate({
-        where: { ...callWhere, duration: { not: null } },
-        _avg: { duration: true },
-      }),
-      // Статистика заказов
-      this.prisma.order.aggregate({
-        where: orderWhere,
-        _count: { id: true },
-      }),
-      // Заказы по статусам
       this.prisma.order.groupBy({
         by: ['statusOrder'],
         where: orderWhere,
         _count: { id: true },
       }),
-      // Статистика по дням (последние 7 дней)
       this.prisma.call.groupBy({
         by: ['dateCreate'],
         where: {
@@ -140,7 +124,6 @@ export class StatsService {
         _count: { id: true },
         orderBy: { dateCreate: 'asc' },
       }),
-      // Статистика по городам
       this.prisma.call.groupBy({
         by: ['city'],
         where: {
@@ -150,7 +133,6 @@ export class StatsService {
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
       }),
-      // Статистика по РК
       this.prisma.call.groupBy({
         by: ['rk'],
         where: {
@@ -160,7 +142,17 @@ export class StatsService {
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
       }),
-      // Выручка
+    ]);
+
+    const [avgCallDuration, ordersStats, totalRevenue] = await Promise.all([
+      this.prisma.call.aggregate({
+        where: { ...callWhere, duration: { not: null } },
+        _avg: { duration: true },
+      }),
+      this.prisma.order.aggregate({
+        where: orderWhere,
+        _count: { id: true },
+      }),
       this.prisma.order.aggregate({
         where: { ...orderWhere, result: { not: null } },
         _sum: { result: true },
