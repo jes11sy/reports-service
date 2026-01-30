@@ -82,6 +82,7 @@ async function bootstrap() {
       },
     },
     crossOriginEmbedderPolicy: false,
+    frameguard: { action: 'deny' }, // X-Frame-Options: DENY
   });
 
   // Компрессия ответов

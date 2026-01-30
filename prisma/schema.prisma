@@ -149,6 +149,7 @@ model Cash {
   city           String?  @default("Москва")
   note           String?
   receiptDoc     String?  @map("receipt_doc")
+  receiptDocs    String[] @default([]) @map("receipt_docs") // Массив чеков для расходов
   paymentPurpose String?  @map("payment_purpose")
   dateCreate     DateTime @default(now()) @map("date_create")
   nameCreate     String   @map("name_create")
