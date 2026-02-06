@@ -18,11 +18,11 @@ export class AnalyticsService {
 
     if (startDate || endDate) {
       if (startDate) {
-        callWhere.dateCreate = { ...callWhere.dateCreate, gte: new Date(startDate) };
+        callWhere.createdAt = { ...callWhere.createdAt, gte: new Date(startDate) };
         orderWhere.createDate = { ...orderWhere.createDate, gte: new Date(startDate) };
       }
       if (endDate) {
-        callWhere.dateCreate = { ...callWhere.dateCreate, lte: new Date(endDate) };
+        callWhere.createdAt = { ...callWhere.createdAt, lte: new Date(endDate) };
         orderWhere.createDate = { ...orderWhere.createDate, lte: new Date(endDate) };
       }
     }
@@ -164,7 +164,7 @@ export class AnalyticsService {
       this.prisma.call.count({ 
         where: {
           ...(startDate || endDate ? {
-            dateCreate: {
+            createdAt: {
               ...(startDate && { gte: new Date(startDate) }),
               ...(endDate && { lte: new Date(endDate) }),
             }
@@ -176,7 +176,7 @@ export class AnalyticsService {
         where: {
           status: 'answered',
           ...(startDate || endDate ? {
-            dateCreate: {
+            createdAt: {
               ...(startDate && { gte: new Date(startDate) }),
               ...(endDate && { lte: new Date(endDate) }),
             }
@@ -260,7 +260,7 @@ export class AnalyticsService {
       this.prisma.call.count({ 
         where: {
           ...(startDate || endDate ? {
-            dateCreate: {
+            createdAt: {
               ...(startDate && { gte: new Date(startDate) }),
               ...(endDate && { lte: new Date(endDate) }),
             }
@@ -272,7 +272,7 @@ export class AnalyticsService {
         where: {
           status: 'answered',
           ...(startDate || endDate ? {
-            dateCreate: {
+            createdAt: {
               ...(startDate && { gte: new Date(startDate) }),
               ...(endDate && { lte: new Date(endDate) }),
             }
@@ -409,7 +409,7 @@ export class AnalyticsService {
     };
 
     const callWhere = {
-      dateCreate: {
+      createdAt: {
         gte: startDate,
         lte: now,
       },
@@ -490,14 +490,14 @@ export class AnalyticsService {
 
     if (startDate || endDate) {
       where.createDate = {};
-      callWhere.dateCreate = {};
+      callWhere.createdAt = {};
       if (startDate) {
         where.createDate.gte = new Date(startDate);
-        callWhere.dateCreate.gte = new Date(startDate);
+        callWhere.createdAt.gte = new Date(startDate);
       }
       if (endDate) {
         where.createDate.lte = new Date(endDate);
-        callWhere.dateCreate.lte = new Date(endDate);
+        callWhere.createdAt.lte = new Date(endDate);
       }
     }
 

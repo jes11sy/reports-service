@@ -170,7 +170,6 @@ model Call {
   avitoName            String?   @map("avito_name")
   phoneClient          String    @map("phone_client")
   phoneAts             String    @map("phone_ats")
-  dateCreate           DateTime  @map("date_create")
   operatorId           Int       @map("operator_id")
   status               String
   createdAt            DateTime  @default(now()) @map("created_at")
@@ -184,16 +183,16 @@ model Call {
   recordUrl            String?   @map("record_url")
   
   @@index([city])
-  @@index([dateCreate])
+  @@index([createdAt])
   @@index([operatorId])
   @@index([phoneClient])
   @@index([phoneAts])
   @@index([avitoName])
   @@index([callId])
   // Новые составные индексы для аналитики
-  @@index([operatorId, dateCreate, status])
-  @@index([city, dateCreate])
-  @@index([dateCreate, status])
+  @@index([operatorId, createdAt, status])
+  @@index([city, createdAt])
+  @@index([createdAt, status])
   @@map("calls")
 }
 

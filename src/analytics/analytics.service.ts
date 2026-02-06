@@ -75,14 +75,14 @@ export class AnalyticsService {
     const orderDateFilter: any = {};
     
     if (startDate || endDate) {
-      callDateFilter.dateCreate = {};
+      callDateFilter.createdAt = {};
       orderDateFilter.createDate = {};
       if (startDate) {
-        callDateFilter.dateCreate.gte = new Date(startDate);
+        callDateFilter.createdAt.gte = new Date(startDate);
         orderDateFilter.createDate.gte = new Date(startDate);
       }
       if (endDate) {
-        callDateFilter.dateCreate.lte = new Date(endDate);
+        callDateFilter.createdAt.lte = new Date(endDate);
         orderDateFilter.createDate.lte = new Date(endDate);
       }
     }
@@ -195,14 +195,14 @@ export class AnalyticsService {
 
     if (startDate || endDate) {
       orderDateFilter.createDate = {};
-      callDateFilter.dateCreate = {};
+      callDateFilter.createdAt = {};
       if (startDate) {
         orderDateFilter.createDate.gte = new Date(startDate);
-        callDateFilter.dateCreate.gte = new Date(startDate);
+        callDateFilter.createdAt.gte = new Date(startDate);
       }
       if (endDate) {
         orderDateFilter.createDate.lte = new Date(endDate);
-        callDateFilter.dateCreate.lte = new Date(endDate);
+        callDateFilter.createdAt.lte = new Date(endDate);
       }
     }
 
@@ -216,12 +216,12 @@ export class AnalyticsService {
 
     const [totalCalls, answeredCalls] = await Promise.all([
       this.prisma.call.count({
-        where: callDateFilter.dateCreate ? { dateCreate: callDateFilter.dateCreate } : {},
+        where: callDateFilter.createdAt ? { createdAt: callDateFilter.createdAt } : {},
       }),
       this.prisma.call.count({
         where: {
           status: CallStatus.ANSWERED,
-          ...(callDateFilter.dateCreate && { dateCreate: callDateFilter.dateCreate }),
+          ...(callDateFilter.createdAt && { createdAt: callDateFilter.createdAt }),
         },
       }),
     ]);
@@ -291,14 +291,14 @@ export class AnalyticsService {
 
     if (startDate || endDate) {
       orderDateFilter.createDate = {};
-      callDateFilter.dateCreate = {};
+      callDateFilter.createdAt = {};
       if (startDate) {
         orderDateFilter.createDate.gte = new Date(startDate);
-        callDateFilter.dateCreate.gte = new Date(startDate);
+        callDateFilter.createdAt.gte = new Date(startDate);
       }
       if (endDate) {
         orderDateFilter.createDate.lte = new Date(endDate);
-        callDateFilter.dateCreate.lte = new Date(endDate);
+        callDateFilter.createdAt.lte = new Date(endDate);
       }
     }
 
@@ -312,12 +312,12 @@ export class AnalyticsService {
 
     const [totalCalls, answeredCalls] = await Promise.all([
       this.prisma.call.count({
-        where: callDateFilter.dateCreate ? { dateCreate: callDateFilter.dateCreate } : {},
+        where: callDateFilter.createdAt ? { createdAt: callDateFilter.createdAt } : {},
       }),
       this.prisma.call.count({
         where: {
           status: CallStatus.ANSWERED,
-          ...(callDateFilter.dateCreate && { dateCreate: callDateFilter.dateCreate }),
+          ...(callDateFilter.createdAt && { createdAt: callDateFilter.createdAt }),
         },
       }),
     ]);
@@ -483,7 +483,7 @@ export class AnalyticsService {
       this.prisma.call.groupBy({
         by: ['status'],
         where: {
-          dateCreate: { gte: startDate, lte: now },
+          createdAt: { gte: startDate, lte: now },
         },
         _count: { id: true },
         _avg: { duration: true },
@@ -561,9 +561,9 @@ export class AnalyticsService {
 
     const callWhere: any = {};
     if (startDate || endDate) {
-      callWhere.dateCreate = {};
-      if (startDate) callWhere.dateCreate.gte = new Date(startDate);
-      if (endDate) callWhere.dateCreate.lte = new Date(endDate);
+      callWhere.createdAt = {};
+      if (startDate) callWhere.createdAt.gte = new Date(startDate);
+      if (endDate) callWhere.createdAt.lte = new Date(endDate);
     }
 
     // groupBy вынесен отдельно из-за ограничений типизации Prisma

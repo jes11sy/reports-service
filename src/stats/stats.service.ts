@@ -79,7 +79,7 @@ export class StatsService {
 
     const callWhere = {
       operatorId,
-      dateCreate: {
+      createdAt: {
         gte: start,
         lte: end,
       },
@@ -112,17 +112,17 @@ export class StatsService {
         _count: { id: true },
       }),
       this.prisma.call.groupBy({
-        by: ['dateCreate'],
+        by: ['createdAt'],
         where: {
           operatorId,
           status: CallStatus.ANSWERED,
-          dateCreate: {
+          createdAt: {
             gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
             lte: end,
           },
         },
         _count: { id: true },
-        orderBy: { dateCreate: 'asc' },
+        orderBy: { createdAt: 'asc' },
       }),
       this.prisma.call.groupBy({
         by: ['city'],
@@ -170,7 +170,7 @@ export class StatsService {
     const totalCalls = acceptedCalls + missedCalls;
 
     const dailyStatsFormatted = dailyStats.map(stat => ({
-      date: stat.dateCreate.toISOString().split('T')[0],
+      date: stat.createdAt.toISOString().split('T')[0],
       calls: stat._count?.id || 0,
     }));
 
@@ -245,7 +245,7 @@ export class StatsService {
     const end = endDate ? new Date(endDate + 'T23:59:59.999Z') : new Date();
 
     const callWhere = {
-      dateCreate: {
+      createdAt: {
         gte: start,
         lte: end,
       },
