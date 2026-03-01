@@ -21,10 +21,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: any) {
     return {
-      userId: payload.id || payload.sub,  // старый backend использует 'id', новые микросервисы 'sub'
+      userId: payload.id || payload.sub,
       login: payload.login,
       role: payload.role,
-      cities: payload.cities,  // Добавляем cities из JWT токена
+      cityIds: payload.cityIds || [],
     };
   }
 }

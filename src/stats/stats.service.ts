@@ -14,15 +14,17 @@ import {
 export class StatsService {
   private readonly logger = new Logger(StatsService.name);
 
-  // Лимиты из конфигурации
   private readonly DEFAULT_LIMIT: number;
 
-  // ✅ FIX: TTL кеширования для разных типов запросов
   private readonly CACHE_TTL = {
-    OPERATOR: 60000,    // 1 минута для статистики оператора
-    OVERALL: 120000,    // 2 минуты для общей статистики
-    DASHBOARD: 30000,   // 30 секунд для дашборда (часто обновляется)
+    OPERATOR: 60000,
+    OVERALL: 120000,
+    DASHBOARD: 30000,
   };
+
+  // Cache for status code → ID mapping
+  private statusCodeToId: Map<string, number> = new Map();
+  private statusCacheExpiry = 0;
 
   constructor(
     private prisma: PrismaService,
@@ -32,9 +34,6 @@ export class StatsService {
     this.DEFAULT_LIMIT = this.configService.get<number>('STATS_DEFAULT_LIMIT', 1000);
   }
 
-  /**
-   * ✅ Ключ кеша
-   */
   private buildCacheKey(prefix: string, params: Record<string, any>): string {
     const sortedParams = Object.keys(params)
       .sort()
@@ -44,13 +43,34 @@ export class StatsService {
     return `stats:${prefix}:${sortedParams || 'all'}`;
   }
 
-  /**
-   * ✅ ОПТИМИЗИРОВАНО: Получить статистику оператора с кешированием
-   */
+  private async getStatusId(code: string): Promise<number | undefined> {
+    const now = Date.now();
+    if (this.statusCacheExpiry < now || this.statusCodeToId.size === 0) {
+      try {
+        const statuses = await this.prisma.$queryRaw<{ id: number; code: string }[]>`
+          SELECT id, code FROM references_service.order_statuses
+        `;
+        this.statusCodeToId = new Map(statuses.map(s => [s.code, s.id]));
+        this.statusCacheExpiry = now + 5 * 60 * 1000; // 5 min
+      } catch (err) {
+        this.logger.error('Failed to load status IDs', err);
+      }
+    }
+    return this.statusCodeToId.get(code);
+  }
+
+  private async getStatusIds(codes: string[]): Promise<number[]> {
+    const ids: number[] = [];
+    for (const code of codes) {
+      const id = await this.getStatusId(code);
+      if (id !== undefined) ids.push(id);
+    }
+    return ids;
+  }
+
   async getOperatorStats(operatorId: number, startDate?: string, endDate?: string) {
     const startTime = Date.now();
 
-    // ✅ Проверяем кеш
     const cacheKey = this.buildCacheKey('operator', { operatorId, startDate, endDate });
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) {
@@ -58,14 +78,13 @@ export class StatsService {
       return cached;
     }
 
-    // Проверяем существование оператора
-    const operator = await this.prisma.callcentreOperator.findUnique({
+    const operator = await this.prisma.operator.findUnique({
       where: { id: operatorId },
       select: {
         id: true,
         name: true,
-        city: true,
-        statusWork: true,
+        cityIds: true,
+        status: true,
       },
     });
 
@@ -73,41 +92,30 @@ export class StatsService {
       throw new NotFoundException('Оператор не найден');
     }
 
-    // Парсинг дат
     const start = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const end = endDate ? new Date(endDate + 'T23:59:59.999Z') : new Date();
 
     const callWhere = {
       operatorId,
-      createdAt: {
-        gte: start,
-        lte: end,
-      },
+      createdAt: { gte: start, lte: end },
     };
 
     const orderWhere = {
-      operatorNameId: operatorId,
-      createDate: {
-        gte: start,
-        lte: end,
-      },
+      operatorId,
+      createdAt: { gte: start, lte: end },
     };
 
-    // groupBy запросы вынесены из $transaction из-за ограничений типизации Prisma
-    const [
-      callsStats,
-      ordersByStatus,
-      dailyStats,
-      cityStats,
-      rkStats,
-    ] = await Promise.all([
+    const completedStatusId = await this.getStatusId(OrderStatus.COMPLETED);
+    const completedStatusIds = completedStatusId ? [completedStatusId] : [];
+
+    const [callsStats, ordersByStatus, dailyStats, cityStats, rkStats] = await Promise.all([
       this.prisma.call.groupBy({
         by: ['status'],
         where: callWhere,
         _count: { id: true },
       }),
       this.prisma.order.groupBy({
-        by: ['statusOrder'],
+        by: ['statusId'],
         where: orderWhere,
         _count: { id: true },
       }),
@@ -125,20 +133,14 @@ export class StatsService {
         orderBy: { createdAt: 'asc' },
       }),
       this.prisma.call.groupBy({
-        by: ['city'],
-        where: {
-          ...callWhere,
-          status: CallStatus.ANSWERED,
-        },
+        by: ['cityId'],
+        where: { ...callWhere, status: CallStatus.ANSWERED },
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
       }),
       this.prisma.call.groupBy({
-        by: ['rk'],
-        where: {
-          ...callWhere,
-          status: CallStatus.ANSWERED,
-        },
+        by: ['rkId'],
+        where: { ...callWhere, status: CallStatus.ANSWERED },
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
       }),
@@ -159,30 +161,38 @@ export class StatsService {
       }),
     ]);
 
+    // Lookup city names
+    const cityIds = cityStats.map(s => s.cityId);
+    const rkIds = rkStats.map(s => s.rkId);
+    const [cities, rks] = await Promise.all([
+      cityIds.length > 0 ? this.prisma.city.findMany({ where: { id: { in: cityIds } }, select: { id: true, name: true } }) : Promise.resolve([]),
+      rkIds.length > 0 ? this.prisma.rk.findMany({ where: { id: { in: rkIds } }, select: { id: true, name: true } }) : Promise.resolve([]),
+    ]);
+    const cityNameMap = new Map(cities.map(c => [c.id, c.name]));
+    const rkNameMap = new Map(rks.map(r => [r.id, r.name]));
+
     const acceptedCalls = callsStats
       .filter(stat => stat.status === CallStatus.ANSWERED)
       .reduce((sum, stat) => sum + stat._count.id, 0);
-    
+
     const missedCalls = callsStats
       .filter(stat => MISSED_CALL_STATUSES.includes(stat.status as any))
       .reduce((sum, stat) => sum + stat._count.id, 0);
-    
+
     const totalCalls = acceptedCalls + missedCalls;
 
-    const dailyStatsFormatted = dailyStats.map(stat => ({
-      date: stat.createdAt.toISOString().split('T')[0],
-      calls: stat._count?.id || 0,
-    }));
+    const completedOrders = completedStatusIds.length > 0
+      ? ordersByStatus.filter(s => completedStatusIds.includes(s.statusId)).reduce((sum, s) => sum + s._count.id, 0)
+      : 0;
 
-    const completedOrders = ordersByStatus.find(s => s.statusOrder === OrderStatus.COMPLETED)?._count.id || 0;
     const revenueSum = totalRevenue._sum.result ? Number(totalRevenue._sum.result) : 0;
 
     const response = {
       operator: {
         id: operator.id,
         name: operator.name,
-        city: operator.city,
-        statusWork: operator.statusWork,
+        cityIds: operator.cityIds,
+        status: operator.status,
       },
       period: {
         startDate: start.toISOString(),
@@ -197,20 +207,27 @@ export class StatsService {
       },
       orders: {
         total: ordersStats._count.id,
-        byStatus: ordersByStatus.reduce((acc, item) => {
-          acc[item.statusOrder] = item._count.id;
+        completed: completedOrders,
+        byStatusId: ordersByStatus.reduce((acc, item) => {
+          acc[item.statusId] = item._count.id;
           return acc;
-        }, {} as Record<string, number>),
+        }, {} as Record<number, number>),
       },
-      dailyStats: dailyStatsFormatted,
+      dailyStats: (dailyStats as any[]).map(stat => ({
+        date: new Date(stat.createdAt).toISOString().split('T')[0],
+        calls: stat._count?.id || 0,
+      })),
       cityStats: cityStats.map(stat => ({
-        city: stat.city || 'Не указан',
+        cityId: stat.cityId,
+        cityName: cityNameMap.get(stat.cityId) || String(stat.cityId),
         calls: stat._count?.id || 0,
       })),
       rkStats: rkStats.map(stat => ({
-        rk: stat.rk || 'Не указан',
+        rkId: stat.rkId,
+        rkName: rkNameMap.get(stat.rkId) || String(stat.rkId),
         calls: stat._count?.id || 0,
       })),
+      revenue: revenueSum,
     };
 
     const duration = Date.now() - startTime;
@@ -221,19 +238,14 @@ export class StatsService {
       orders: response.orders.total,
     });
 
-    // ✅ Кешируем результат
     await this.cacheManager.set(cacheKey, response, this.CACHE_TTL.OPERATOR);
 
     return response;
   }
 
-  /**
-   * ✅ ОПТИМИЗИРОВАНО: Получить общую статистику с кешированием
-   */
   async getOverallStats(startDate?: string, endDate?: string) {
     const startTime = Date.now();
 
-    // ✅ Проверяем кеш
     const cacheKey = this.buildCacheKey('overall', { startDate, endDate });
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) {
@@ -244,21 +256,9 @@ export class StatsService {
     const start = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const end = endDate ? new Date(endDate + 'T23:59:59.999Z') : new Date();
 
-    const callWhere = {
-      createdAt: {
-        gte: start,
-        lte: end,
-      },
-    };
+    const callWhere = { createdAt: { gte: start, lte: end } };
+    const orderWhere = { createdAt: { gte: start, lte: end } };
 
-    const orderWhere = {
-      createDate: {
-        gte: start,
-        lte: end,
-      },
-    };
-
-    // groupBy запросы вынесены из $transaction из-за ограничений типизации Prisma
     const [operatorStats, cityStats, rkStats] = await Promise.all([
       this.prisma.call.groupBy({
         by: ['operatorId'],
@@ -267,13 +267,13 @@ export class StatsService {
         orderBy: { _count: { id: 'desc' } },
       }),
       this.prisma.call.groupBy({
-        by: ['city'],
+        by: ['cityId'],
         where: callWhere,
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
       }),
       this.prisma.call.groupBy({
-        by: ['rk'],
+        by: ['rkId'],
         where: callWhere,
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
@@ -282,29 +282,26 @@ export class StatsService {
 
     const [totalCalls, acceptedCalls, missedCalls, totalOrders] = await Promise.all([
       this.prisma.call.count({ where: callWhere }),
-      this.prisma.call.count({
-        where: { ...callWhere, status: CallStatus.ANSWERED },
-      }),
-      this.prisma.call.count({
-        where: {
-          ...callWhere,
-          status: { in: MISSED_CALL_STATUSES },
-        },
-      }),
+      this.prisma.call.count({ where: { ...callWhere, status: CallStatus.ANSWERED } }),
+      this.prisma.call.count({ where: { ...callWhere, status: { in: MISSED_CALL_STATUSES } } }),
       this.prisma.order.count({ where: orderWhere }),
     ]);
 
-    // Получаем имена операторов
     const operatorIds = operatorStats.map(stat => stat.operatorId);
-    const operators = await this.prisma.callcentreOperator.findMany({
+    const operators = await this.prisma.operator.findMany({
       where: { id: { in: operatorIds } },
       select: { id: true, name: true },
     });
+    const operatorMap = new Map(operators.map(op => [op.id, op.name]));
 
-    const operatorMap = operators.reduce((acc, op) => {
-      acc[op.id] = op.name;
-      return acc;
-    }, {} as Record<number, string>);
+    const cityIds = cityStats.map(s => s.cityId);
+    const rkIds = rkStats.map(s => s.rkId);
+    const [cities, rks] = await Promise.all([
+      cityIds.length > 0 ? this.prisma.city.findMany({ where: { id: { in: cityIds } }, select: { id: true, name: true } }) : Promise.resolve([]),
+      rkIds.length > 0 ? this.prisma.rk.findMany({ where: { id: { in: rkIds } }, select: { id: true, name: true } }) : Promise.resolve([]),
+    ]);
+    const cityNameMap = new Map(cities.map(c => [c.id, c.name]));
+    const rkNameMap = new Map(rks.map(r => [r.id, r.name]));
 
     const response = {
       period: {
@@ -317,19 +314,19 @@ export class StatsService {
         missed: missedCalls,
         acceptanceRate: totalCalls > 0 ? Math.round((acceptedCalls / totalCalls) * 100) : 0,
       },
-      orders: {
-        total: totalOrders,
-      },
+      orders: { total: totalOrders },
       operatorStats: operatorStats.map(stat => ({
-        operatorName: operatorMap[stat.operatorId] || 'Не указан',
+        operatorName: operatorMap.get(stat.operatorId) || 'Не указан',
         calls: stat._count?.id || 0,
       })),
       cityStats: cityStats.map(stat => ({
-        city: stat.city || 'Не указан',
+        cityId: stat.cityId,
+        cityName: cityNameMap.get(stat.cityId) || String(stat.cityId),
         calls: stat._count?.id || 0,
       })),
       rkStats: rkStats.map(stat => ({
-        rk: stat.rk || 'Не указан',
+        rkId: stat.rkId,
+        rkName: rkNameMap.get(stat.rkId) || String(stat.rkId),
         calls: stat._count?.id || 0,
       })),
     };
@@ -341,19 +338,14 @@ export class StatsService {
       orders: response.orders.total,
     });
 
-    // ✅ Кешируем результат
     await this.cacheManager.set(cacheKey, response, this.CACHE_TTL.OVERALL);
 
     return response;
   }
 
-  /**
-   * ✅ ОПТИМИЗИРОВАНО: Статистика для дашборда с кешированием
-   */
   async getDashboardStats() {
     const startTime = Date.now();
 
-    // ✅ Проверяем кеш
     const cacheKey = 'stats:dashboard:current-month';
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) {
@@ -361,14 +353,18 @@ export class StatsService {
       return cached;
     }
 
-    // Определяем границы текущего месяца
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
-    // ✅ Транзакция для согласованности
+    const [completedStatusId, cancelledStatusId, notOrderStatusId] = await Promise.all([
+      this.getStatusId(OrderStatus.COMPLETED),
+      this.getStatusId(OrderStatus.CANCELLED),
+      this.getStatusId(OrderStatus.NOT_ORDER),
+    ]);
+
     const [
-      callCenterEmployees,
+      operatorCount,
       directors,
       masters,
       orders,
@@ -379,61 +375,54 @@ export class StatsService {
       incomeSum,
       expenseSum,
     ] = await this.prisma.$transaction([
-      // Сотрудники
-      this.prisma.callcentreOperator.count({
-        where: { status: 'active' }
-      }),
+      this.prisma.operator.count({ where: { status: 'active' } }),
       this.prisma.director.count(),
-      this.prisma.master.count({
-        where: { statusWork: 'работает' }
-      }),
-      // Заказы
+      this.prisma.master.count({ where: { status: 'active' } }),
       this.prisma.order.count({
-        where: { createDate: { gte: startOfMonth, lte: endOfMonth } }
+        where: { createdAt: { gte: startOfMonth, lte: endOfMonth } },
       }),
       this.prisma.order.count({
         where: {
-          createDate: { gte: startOfMonth, lte: endOfMonth },
-          statusOrder: OrderStatus.NOT_ORDER
-        }
+          createdAt: { gte: startOfMonth, lte: endOfMonth },
+          ...(notOrderStatusId ? { statusId: notOrderStatusId } : {}),
+        },
       }),
       this.prisma.order.count({
         where: {
-          createDate: { gte: startOfMonth, lte: endOfMonth },
-          statusOrder: OrderStatus.CANCELLED
-        }
+          createdAt: { gte: startOfMonth, lte: endOfMonth },
+          ...(cancelledStatusId ? { statusId: cancelledStatusId } : {}),
+        },
       }),
       this.prisma.order.count({
         where: {
-          createDate: { gte: startOfMonth, lte: endOfMonth },
-          statusOrder: { in: [OrderStatus.COMPLETED, OrderStatus.CANCELLED] },
-          result: { gt: 0 }
-        }
+          createdAt: { gte: startOfMonth, lte: endOfMonth },
+          ...(completedStatusId || cancelledStatusId
+            ? { statusId: { in: [completedStatusId, cancelledStatusId].filter(Boolean) as number[] } }
+            : {}),
+          result: { gt: 0 },
+        },
       }),
-      // Оборот
       this.prisma.order.aggregate({
         where: {
-          statusOrder: OrderStatus.COMPLETED,
+          ...(completedStatusId ? { statusId: completedStatusId } : {}),
           clean: { not: null },
-          closingData: { gte: startOfMonth, lte: endOfMonth }
+          closingAt: { gte: startOfMonth, lte: endOfMonth },
         },
-        _sum: { clean: true }
+        _sum: { clean: true },
       }),
-      // Касса - приход
       this.prisma.cash.aggregate({
         where: {
-          name: CashOperationType.INCOME,
-          dateCreate: { gte: startOfMonth, lte: endOfMonth }
+          type: CashOperationType.INCOME,
+          createdAt: { gte: startOfMonth, lte: endOfMonth },
         },
-        _sum: { amount: true }
+        _sum: { amount: true },
       }),
-      // Касса - расход
       this.prisma.cash.aggregate({
         where: {
-          name: CashOperationType.EXPENSE,
-          dateCreate: { gte: startOfMonth, lte: endOfMonth }
+          type: CashOperationType.EXPENSE,
+          createdAt: { gte: startOfMonth, lte: endOfMonth },
         },
-        _sum: { amount: true }
+        _sum: { amount: true },
       }),
     ]);
 
@@ -443,19 +432,19 @@ export class StatsService {
 
     const response = {
       employees: {
-        callCenter: callCenterEmployees,
-        directors: directors,
-        masters: masters
+        operators: operatorCount,
+        directors,
+        masters,
       },
-      orders: orders,
-      notOrders: notOrders,
-      cancellations: cancellations,
-      completedInMoney: completedInMoney,
+      orders,
+      notOrders,
+      cancellations,
+      completedInMoney,
       finance: {
         revenue: Math.round(revenue),
         profit: Math.round(profit),
-        expenses: Math.round(expenses)
-      }
+        expenses: Math.round(expenses),
+      },
     };
 
     const duration = Date.now() - startTime;
@@ -463,10 +452,9 @@ export class StatsService {
       period: `${startOfMonth.toISOString()} - ${endOfMonth.toISOString()}`,
       employees: response.employees,
       orders: response.orders,
-      finance: response.finance
+      finance: response.finance,
     });
 
-    // ✅ Кешируем результат (короткий TTL для дашборда)
     await this.cacheManager.set(cacheKey, response, this.CACHE_TTL.DASHBOARD);
 
     return response;

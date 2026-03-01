@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
 
 jobs:
   build-and-push:
@@ -36,9 +37,9 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ secrets.DOCKER_USERNAME }}/reports-service:latest
             ${{ secrets.DOCKER_USERNAME }}/reports-service:${{ github.ref_name }}
             ${{ secrets.DOCKER_USERNAME }}/reports-service:${{ github.ref_name }}-${{ github.sha }}
+            ${{ github.ref_name == 'main' && format('{0}/reports-service:latest', secrets.DOCKER_USERNAME) || '' }}
           cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/reports-service:buildcache
           cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/reports-service:buildcache,mode=max
 

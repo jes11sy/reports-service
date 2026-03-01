@@ -12,7 +12,7 @@ export class StatsController {
 
   @Get('health')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { limit: 60, ttl: 60000 } }) // Защита от DDoS
+  @Throttle({ default: { limit: 60, ttl: 60000 } })
   @ApiOperation({ summary: 'Health check endpoint' })
   async health() {
     return {
@@ -22,18 +22,17 @@ export class StatsController {
     };
   }
 
-  // Личная статистика оператора/админа колл-центра
   @Get('my')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.CALLCENTRE_OPERATOR, UserRole.CALLCENTRE_ADMIN, UserRole.OPERATOR)
+  @Roles(UserRole.OPERATOR, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить личную статистику оператора' })
   @ApiQuery({ name: 'startDate', required: false, type: String, example: '2024-01-01' })
   @ApiQuery({ name: 'endDate', required: false, type: String, example: '2024-12-31' })
   async getMyStats(
-    @Request() req,
+    @Request() req: any,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ) {
@@ -41,11 +40,10 @@ export class StatsController {
     return this.statsService.getOperatorStats(operatorId, startDate, endDate);
   }
 
-  // Статистика конкретного оператора (для админов)
   @Get('operator/:operatorId')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить статистику оператора' })
@@ -59,11 +57,10 @@ export class StatsController {
     return this.statsService.getOperatorStats(+operatorId, startDate, endDate);
   }
 
-  // Общая статистика (для админов)
   @Get('overall')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить общую статистику' })
@@ -76,11 +73,10 @@ export class StatsController {
     return this.statsService.getOverallStats(startDate, endDate);
   }
 
-  // Статистика для главного дашборда админки
   @Get('dashboard')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить статистику для дашборда админки' })
@@ -88,7 +84,7 @@ export class StatsController {
     const stats = await this.statsService.getDashboardStats();
     return {
       success: true,
-      data: stats
+      data: stats,
     };
   }
 }

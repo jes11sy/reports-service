@@ -1,22 +1,22 @@
 /**
  * Централизованные константы статусов заказов
- * Используются во всех сервисах для согласованности
+ * Соответствуют полю code в таблице order_statuses (references_service)
  */
 export const OrderStatus = {
   // Финальные статусы
-  COMPLETED: 'Готово',      // Заказ выполнен успешно
-  CANCELLED: 'Отказ',       // Клиент отказался
-  NOT_ORDER: 'Незаказ',     // Не стал заказом
-  
+  COMPLETED: 'closed',        // Заказ выполнен успешно (Готово)
+  CANCELLED: 'cancelled',     // Клиент отказался (Отказ)
+  NOT_ORDER: 'not_order',     // Не стал заказом (Незаказ)
+
   // Рабочие статусы
-  NEW: 'Новый',
-  IN_PROGRESS: 'В работе',
-  ASSIGNED: 'Назначен мастер',
-  MASTER_LEFT: 'Мастер выехал',
-  MODERN: 'Модерн',         // На модерации
-  
-  // Для совместимости со старым кодом (alias)
-  CLOSED: 'Готово',         // Синоним COMPLETED
+  NEW: 'new',
+  IN_PROGRESS: 'in_progress',
+  MASTER_ASSIGNED: 'master_assigned',
+  MASTER_LEFT: 'master_left',
+  MODERN: 'modern',
+
+  // Синоним для совместимости
+  CLOSED: 'closed',
 } as const;
 
 export type OrderStatusType = typeof OrderStatus[keyof typeof OrderStatus];
@@ -41,7 +41,7 @@ export const REVENUE_STATUSES: OrderStatusType[] = [
  */
 export const IN_PROGRESS_STATUSES: OrderStatusType[] = [
   OrderStatus.IN_PROGRESS,
-  OrderStatus.ASSIGNED,
+  OrderStatus.MASTER_ASSIGNED,
   OrderStatus.MASTER_LEFT,
 ];
 
@@ -57,9 +57,8 @@ export const REFUSAL_STATUSES: OrderStatusType[] = [
  * Статусы работы сотрудников
  */
 export const WorkStatus = {
-  ACTIVE: 'работает',
-  INACTIVE: 'не работает',
-  ON_VACATION: 'в отпуске',
+  ACTIVE: 'active',
+  INACTIVE: 'inactive',
 } as const;
 
 export type WorkStatusType = typeof WorkStatus[keyof typeof WorkStatus];
@@ -68,8 +67,8 @@ export type WorkStatusType = typeof WorkStatus[keyof typeof WorkStatus];
  * Типы операций в кассе
  */
 export const CashOperationType = {
-  INCOME: 'приход',
-  EXPENSE: 'расход',
+  INCOME: 'income',
+  EXPENSE: 'expense',
 } as const;
 
 export type CashOperationTypeValue = typeof CashOperationType[keyof typeof CashOperationType];

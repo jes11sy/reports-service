@@ -6,7 +6,7 @@ export interface JwtUserPayload {
   userId: number;
   login: string;
   role: UserRoleType;
-  cities?: string[];     // Для директоров
+  cityIds?: number[];    // Для директоров/операторов
   iat?: number;
   exp?: number;
 }
@@ -23,5 +23,5 @@ export interface RequestUser {
   userId: number;
   login: string;
   role: UserRoleType;
-  cities?: string[];
+  cityIds?: number[];
 }

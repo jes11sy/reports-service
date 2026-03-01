@@ -14,11 +14,9 @@ import {
 export class AnalyticsService {
   private readonly logger = new Logger(AnalyticsService.name);
 
-  // Лимиты из конфигурации
   private readonly DEFAULT_LIMIT: number;
   private readonly MAX_LIMIT: number;
 
-  // TTL кеша из конфигурации
   private readonly CACHE_TTL: {
     DASHBOARD: number;
     OPERATORS: number;
@@ -27,6 +25,10 @@ export class AnalyticsService {
     DAILY: number;
   };
 
+  // Cache for status code → ID mapping
+  private statusCodeToId: Map<string, number> = new Map();
+  private statusCacheExpiry = 0;
+
   constructor(
     private prisma: PrismaService,
     private configService: ConfigService,
@@ -34,7 +36,7 @@ export class AnalyticsService {
   ) {
     this.DEFAULT_LIMIT = this.configService.get<number>('ANALYTICS_DEFAULT_LIMIT', 1000);
     this.MAX_LIMIT = this.configService.get<number>('ANALYTICS_MAX_LIMIT', 5000);
-    
+
     this.CACHE_TTL = {
       DASHBOARD: this.configService.get<number>('CACHE_TTL_DASHBOARD', 30000),
       OPERATORS: this.configService.get<number>('CACHE_TTL_OPERATORS', 120000),
@@ -44,9 +46,6 @@ export class AnalyticsService {
     };
   }
 
-  /**
-   * ✅ Улучшенный ключ кеша с версионированием
-   */
   private buildCacheKey(prefix: string, params: Record<string, any>): string {
     const sortedParams = Object.keys(params)
       .sort()
@@ -56,13 +55,25 @@ export class AnalyticsService {
     return `v2:${prefix}:${sortedParams || 'all'}`;
   }
 
-  /**
-   * ✅ ОПТИМИЗИРОВАНО: Статистика операторов
-   */
+  private async getStatusId(code: string): Promise<number | undefined> {
+    const now = Date.now();
+    if (this.statusCacheExpiry < now || this.statusCodeToId.size === 0) {
+      try {
+        const statuses = await this.prisma.$queryRaw<{ id: number; code: string }[]>`
+          SELECT id, code FROM references_service.order_statuses
+        `;
+        this.statusCodeToId = new Map(statuses.map(s => [s.code, s.id]));
+        this.statusCacheExpiry = now + 5 * 60 * 1000;
+      } catch (err) {
+        this.logger.error('Failed to load status IDs', err);
+      }
+    }
+    return this.statusCodeToId.get(code);
+  }
+
   async getOperatorStatistics(startDate?: string, endDate?: string, operatorId?: number) {
     const startTime = Date.now();
 
-    // Проверяем кеш
     const cacheKey = this.buildCacheKey('operator-stats', { operatorId, startDate, endDate });
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) {
@@ -70,35 +81,34 @@ export class AnalyticsService {
       return cached;
     }
 
-    // Фильтры по дате
     const callDateFilter: any = {};
     const orderDateFilter: any = {};
-    
+
     if (startDate || endDate) {
       callDateFilter.createdAt = {};
-      orderDateFilter.createDate = {};
+      orderDateFilter.createdAt = {};
       if (startDate) {
         callDateFilter.createdAt.gte = new Date(startDate);
-        orderDateFilter.createDate.gte = new Date(startDate);
+        orderDateFilter.createdAt.gte = new Date(startDate);
       }
       if (endDate) {
         callDateFilter.createdAt.lte = new Date(endDate);
-        orderDateFilter.createDate.lte = new Date(endDate);
+        orderDateFilter.createdAt.lte = new Date(endDate);
       }
     }
 
-    // 1. Получаем список операторов (1 запрос)
-    const operators = await this.prisma.callcentreOperator.findMany({
+    const completedStatusId = await this.getStatusId(OrderStatus.COMPLETED);
+
+    const operators = await this.prisma.operator.findMany({
       where: operatorId ? { id: operatorId } : {},
       select: {
         id: true,
         name: true,
         login: true,
-        statusWork: true,
+        status: true,
       },
     });
 
-    // 2. Группированная статистика по звонкам
     const callStats = await this.prisma.call.groupBy({
       by: ['operatorId', 'status'],
       where: {
@@ -109,32 +119,32 @@ export class AnalyticsService {
       _avg: { duration: true },
     });
 
-    // 3. Группированная статистика по заказам
     const orderStats = await this.prisma.order.groupBy({
-      by: ['operatorNameId', 'statusOrder'],
+      by: ['operatorId', 'statusId'],
       where: {
-        ...(operatorId && { operatorNameId: operatorId }),
+        ...(operatorId && { operatorId }),
         ...orderDateFilter,
       },
       _count: { id: true },
       _sum: { result: true },
     });
 
-    // 4. Собираем данные в памяти
     const operatorStatsResult = operators.map((operator) => {
       const operatorCalls = callStats.filter(c => c.operatorId === operator.id);
       const totalCalls = operatorCalls.reduce((sum, c) => sum + c._count.id, 0);
       const answeredCalls = operatorCalls.find(c => c.status === CallStatus.ANSWERED)?._count.id || 0;
       const missedCalls = operatorCalls.find(c => c.status === CallStatus.MISSED)?._count.id || 0;
-      
+
       const avgDuration = operatorCalls.reduce((sum, c) => {
         return sum + ((c._avg.duration || 0) * c._count.id);
       }, 0) / (totalCalls || 1);
 
-      const operatorOrders = orderStats.filter(o => o.operatorNameId === operator.id);
+      const operatorOrders = orderStats.filter(o => o.operatorId === operator.id);
       const totalOrders = operatorOrders.reduce((sum, o) => sum + o._count.id, 0);
-      const completedOrders = operatorOrders.find(o => o.statusOrder === OrderStatus.COMPLETED)?._count.id || 0;
-      
+      const completedOrders = completedStatusId
+        ? operatorOrders.filter(o => o.statusId === completedStatusId).reduce((sum, o) => sum + o._count.id, 0)
+        : 0;
+
       const totalRevenue = operatorOrders.reduce((sum, o) => {
         return sum + Number(o._sum.result || 0);
       }, 0);
@@ -145,7 +155,7 @@ export class AnalyticsService {
       return {
         operatorId: operator.id,
         operatorName: operator.name,
-        status: operator.statusWork,
+        status: operator.status,
         calls: {
           total: totalCalls,
           answered: answeredCalls,
@@ -171,15 +181,11 @@ export class AnalyticsService {
       data: operatorStatsResult,
     };
 
-    // Кешируем
     await this.cacheManager.set(cacheKey, result, this.CACHE_TTL.OPERATORS);
 
     return result;
   }
 
-  /**
-   * ✅ ОПТИМИЗИРОВАНО: Аналитика по городам
-   */
   async getCityAnalytics(startDate?: string, endDate?: string) {
     const startTime = Date.now();
 
@@ -194,21 +200,22 @@ export class AnalyticsService {
     const callDateFilter: any = {};
 
     if (startDate || endDate) {
-      orderDateFilter.createDate = {};
+      orderDateFilter.createdAt = {};
       callDateFilter.createdAt = {};
       if (startDate) {
-        orderDateFilter.createDate.gte = new Date(startDate);
+        orderDateFilter.createdAt.gte = new Date(startDate);
         callDateFilter.createdAt.gte = new Date(startDate);
       }
       if (endDate) {
-        orderDateFilter.createDate.lte = new Date(endDate);
+        orderDateFilter.createdAt.lte = new Date(endDate);
         callDateFilter.createdAt.lte = new Date(endDate);
       }
     }
 
-    // Группированная статистика (groupBy вынесен из $transaction из-за ограничений типизации Prisma)
+    const completedStatusId = await this.getStatusId(OrderStatus.COMPLETED);
+
     const orderStats = await this.prisma.order.groupBy({
-      by: ['city', 'statusOrder'],
+      by: ['cityId', 'statusId'],
       where: orderDateFilter,
       _count: { id: true },
       _sum: { result: true },
@@ -226,14 +233,20 @@ export class AnalyticsService {
       }),
     ]);
 
-    const cities = [...new Set(orderStats.map(s => s.city))];
+    const cityIds = [...new Set(orderStats.map(s => s.cityId).filter(Boolean))] as number[];
+    const cityRecords = cityIds.length > 0
+      ? await this.prisma.city.findMany({ where: { id: { in: cityIds } }, select: { id: true, name: true } })
+      : [];
+    const cityNameMap = new Map(cityRecords.map(c => [c.id, c.name]));
 
-    const cityAnalytics = cities.map((city) => {
-      const cityOrders = orderStats.filter(s => s.city === city);
-      
+    const cityAnalytics = cityIds.map((cityId) => {
+      const cityOrders = orderStats.filter(s => s.cityId === cityId);
+
       const totalOrders = cityOrders.reduce((sum, o) => sum + o._count.id, 0);
-      const completedOrders = cityOrders.find(o => o.statusOrder === OrderStatus.COMPLETED)?._count.id || 0;
-      
+      const completedOrders = completedStatusId
+        ? cityOrders.filter(o => o.statusId === completedStatusId).reduce((sum, o) => sum + o._count.id, 0)
+        : 0;
+
       const totalRevenue = cityOrders.reduce((sum, o) => {
         return sum + Number(o._sum.result || 0);
       }, 0);
@@ -242,7 +255,8 @@ export class AnalyticsService {
       const completionRate = totalOrders > 0 ? (completedOrders / totalOrders) * 100 : 0;
 
       return {
-        city,
+        cityId,
+        cityName: cityNameMap.get(cityId) || String(cityId),
         calls: {
           total: totalCalls,
           answered: answeredCalls,
@@ -261,7 +275,7 @@ export class AnalyticsService {
     });
 
     const duration = Date.now() - startTime;
-    this.logger.log(`✅ getCityAnalytics completed in ${duration}ms (${cities.length} cities, 3 queries)`);
+    this.logger.log(`✅ getCityAnalytics completed in ${duration}ms (${cityIds.length} cities, 3 queries)`);
 
     const result = {
       success: true,
@@ -273,9 +287,6 @@ export class AnalyticsService {
     return result;
   }
 
-  /**
-   * ✅ ОПТИМИЗИРОВАНО: Аналитика по РК
-   */
   async getCampaignAnalytics(startDate?: string, endDate?: string) {
     const startTime = Date.now();
 
@@ -290,21 +301,22 @@ export class AnalyticsService {
     const callDateFilter: any = {};
 
     if (startDate || endDate) {
-      orderDateFilter.createDate = {};
+      orderDateFilter.createdAt = {};
       callDateFilter.createdAt = {};
       if (startDate) {
-        orderDateFilter.createDate.gte = new Date(startDate);
+        orderDateFilter.createdAt.gte = new Date(startDate);
         callDateFilter.createdAt.gte = new Date(startDate);
       }
       if (endDate) {
-        orderDateFilter.createDate.lte = new Date(endDate);
+        orderDateFilter.createdAt.lte = new Date(endDate);
         callDateFilter.createdAt.lte = new Date(endDate);
       }
     }
 
-    // groupBy вынесен из $transaction из-за ограничений типизации Prisma
+    const completedStatusId = await this.getStatusId(OrderStatus.COMPLETED);
+
     const campaignStats = await this.prisma.order.groupBy({
-      by: ['rk', 'statusOrder'],
+      by: ['rkId', 'statusId'],
       where: orderDateFilter,
       _count: { id: true },
       _sum: { result: true },
@@ -322,14 +334,20 @@ export class AnalyticsService {
       }),
     ]);
 
-    const campaigns = [...new Set(campaignStats.map(s => s.rk))];
+    const rkIds = [...new Set(campaignStats.map(s => s.rkId).filter(Boolean))] as number[];
+    const rkRecords = rkIds.length > 0
+      ? await this.prisma.rk.findMany({ where: { id: { in: rkIds } }, select: { id: true, name: true } })
+      : [];
+    const rkNameMap = new Map(rkRecords.map(r => [r.id, r.name]));
 
-    const campaignAnalytics = campaigns.map((rk) => {
-      const rkOrders = campaignStats.filter(s => s.rk === rk);
-      
+    const campaignAnalytics = rkIds.map((rkId) => {
+      const rkOrders = campaignStats.filter(s => s.rkId === rkId);
+
       const totalOrders = rkOrders.reduce((sum, o) => sum + o._count.id, 0);
-      const completedOrders = rkOrders.find(o => o.statusOrder === OrderStatus.COMPLETED)?._count.id || 0;
-      
+      const completedOrders = completedStatusId
+        ? rkOrders.filter(o => o.statusId === completedStatusId).reduce((sum, o) => sum + o._count.id, 0)
+        : 0;
+
       const totalRevenue = rkOrders.reduce((sum, o) => {
         return sum + Number(o._sum.result || 0);
       }, 0);
@@ -339,7 +357,8 @@ export class AnalyticsService {
       const roi = totalRevenue > 0 && totalOrders > 0 ? totalRevenue / totalOrders : 0;
 
       return {
-        campaign: rk,
+        rkId,
+        rkName: rkNameMap.get(rkId) || String(rkId),
         calls: {
           total: totalCalls,
           answered: answeredCalls,
@@ -359,7 +378,7 @@ export class AnalyticsService {
     });
 
     const duration = Date.now() - startTime;
-    this.logger.log(`✅ getCampaignAnalytics completed in ${duration}ms (${campaigns.length} campaigns, 3 queries)`);
+    this.logger.log(`✅ getCampaignAnalytics completed in ${duration}ms (${rkIds.length} campaigns, 3 queries)`);
 
     const result = {
       success: true,
@@ -371,15 +390,10 @@ export class AnalyticsService {
     return result;
   }
 
-  /**
-   * ✅ ОПТИМИЗИРОВАНО: Дневная метрика с SQL агрегацией
-   * БЫЛО: findMany до 5000 записей + агрегация в JS
-   * СТАЛО: SQL GROUP BY DATE() - минимальная передача данных
-   */
-  async getDailyMetrics(startDate?: string, endDate?: string, city?: string, limit?: number) {
+  async getDailyMetrics(startDate?: string, endDate?: string, cityId?: number, limit?: number) {
     const startTime = Date.now();
-    
-    const cacheKey = this.buildCacheKey('daily-metrics', { startDate, endDate, city });
+
+    const cacheKey = this.buildCacheKey('daily-metrics', { startDate, endDate, cityId });
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) {
       this.logger.debug(`✅ getDailyMetrics from CACHE in ${Date.now() - startTime}ms`);
@@ -390,17 +404,18 @@ export class AnalyticsService {
     const start = startDate ? new Date(startDate) : new Date(now.getFullYear(), now.getMonth(), 1);
     const end = endDate ? new Date(endDate) : now;
 
-    // ✅ Параметризованный SQL запрос с агрегацией на стороне БД
+    const completedStatusId = await this.getStatusId(OrderStatus.COMPLETED);
+
     const params: any[] = [start, end];
     let paramIndex = 3;
     let cityCondition = '';
 
-    if (city) {
-      cityCondition = ` AND city = $${paramIndex}`;
-      params.push(city);
+    if (cityId) {
+      cityCondition = ` AND city_id = $${paramIndex}`;
+      params.push(cityId);
+      paramIndex++;
     }
 
-    // ✅ SQL GROUP BY DATE() вместо загрузки всех записей
     const dailyStats = await this.prisma.$queryRawUnsafe<Array<{
       date: Date;
       total_orders: bigint;
@@ -408,21 +423,20 @@ export class AnalyticsService {
       total_revenue: number;
     }>>(
       `SELECT 
-        DATE(create_date) as date,
+        DATE(created_at) as date,
         COUNT(*) as total_orders,
-        COUNT(*) FILTER (WHERE status_order = '${OrderStatus.COMPLETED}') as completed_orders,
-        COALESCE(SUM(result) FILTER (WHERE status_order = '${OrderStatus.COMPLETED}'), 0) as total_revenue
-      FROM orders
-      WHERE create_date >= $1 AND create_date <= $2 ${cityCondition}
-      GROUP BY DATE(create_date)
+        COUNT(*) FILTER (WHERE status_id = ${completedStatusId ?? 0}) as completed_orders,
+        COALESCE(SUM(result) FILTER (WHERE status_id = ${completedStatusId ?? 0}), 0) as total_revenue
+      FROM orders_service.orders
+      WHERE created_at >= $1 AND created_at <= $2 ${cityCondition}
+      GROUP BY DATE(created_at)
       ORDER BY date ASC`,
       ...params
     );
 
-    // Преобразуем результат
     const dailyMetrics = dailyStats.map(stat => ({
-      date: stat.date instanceof Date 
-        ? stat.date.toISOString().split('T')[0] 
+      date: stat.date instanceof Date
+        ? stat.date.toISOString().split('T')[0]
         : String(stat.date),
       totalOrders: Number(stat.total_orders),
       completedOrders: Number(stat.completed_orders),
@@ -442,9 +456,6 @@ export class AnalyticsService {
     return result;
   }
 
-  /**
-   * ✅ ОПТИМИЗИРОВАНО: Dashboard
-   */
   async getDashboardData(period: 'today' | 'week' | 'month' = 'today') {
     const startTime = Date.now();
 
@@ -454,7 +465,7 @@ export class AnalyticsService {
       this.logger.debug(`✅ getDashboardData from CACHE in ${Date.now() - startTime}ms`);
       return cached;
     }
-    
+
     const now = new Date();
     let startDate: Date;
 
@@ -470,40 +481,39 @@ export class AnalyticsService {
         break;
     }
 
-    // Параллельные запросы (groupBy вынесен из $transaction из-за ограничений типизации Prisma)
+    const completedStatusId = await this.getStatusId(OrderStatus.COMPLETED);
+    const inProgressStatusIds = await Promise.all(IN_PROGRESS_STATUSES.map(code => this.getStatusId(code)));
+    const validInProgressIds = inProgressStatusIds.filter((id): id is number => id !== undefined);
+
     const [orderStats, callStats, activeOperators] = await Promise.all([
       this.prisma.order.groupBy({
-        by: ['statusOrder'],
-        where: {
-          createDate: { gte: startDate, lte: now },
-        },
+        by: ['statusId'],
+        where: { createdAt: { gte: startDate, lte: now } },
         _count: { id: true },
         _sum: { result: true },
       }),
       this.prisma.call.groupBy({
         by: ['status'],
-        where: {
-          createdAt: { gte: startDate, lte: now },
-        },
+        where: { createdAt: { gte: startDate, lte: now } },
         _count: { id: true },
         _avg: { duration: true },
       }),
-      this.prisma.callcentreOperator.count({ 
-        where: { statusWork: WorkStatus.ACTIVE } 
-      }),
+      this.prisma.operator.count({ where: { status: WorkStatus.ACTIVE } }),
     ]);
 
     const totalOrders = orderStats.reduce((sum, s) => sum + s._count.id, 0);
-    const completedOrders = orderStats.find(s => s.statusOrder === OrderStatus.COMPLETED)?._count.id || 0;
-    const inProgressOrders = orderStats
-      .filter(s => IN_PROGRESS_STATUSES.includes(s.statusOrder as any))
-      .reduce((sum, s) => sum + s._count.id, 0);
-    
+    const completedOrders = completedStatusId
+      ? orderStats.filter(s => s.statusId === completedStatusId).reduce((sum, s) => sum + s._count.id, 0)
+      : 0;
+    const inProgressOrders = validInProgressIds.length > 0
+      ? orderStats.filter(s => validInProgressIds.includes(s.statusId)).reduce((sum, s) => sum + s._count.id, 0)
+      : 0;
+
     const totalRevenue = orderStats.reduce((sum, s) => sum + Number(s._sum.result || 0), 0);
 
     const totalCalls = callStats.reduce((sum, s) => sum + s._count.id, 0);
     const answeredCalls = callStats.find(s => s.status === CallStatus.ANSWERED)?._count.id || 0;
-    
+
     const avgCallDuration = callStats.reduce((sum, s) => {
       return sum + ((s._avg.duration || 0) * s._count.id);
     }, 0) / (totalCalls || 1);
@@ -547,16 +557,13 @@ export class AnalyticsService {
     return result;
   }
 
-  /**
-   * Performance Metrics с пагинацией
-   */
   async getPerformanceMetrics(startDate?: string, endDate?: string) {
     const where: any = {};
 
     if (startDate || endDate) {
-      where.createDate = {};
-      if (startDate) where.createDate.gte = new Date(startDate);
-      if (endDate) where.createDate.lte = new Date(endDate);
+      where.createdAt = {};
+      if (startDate) where.createdAt.gte = new Date(startDate);
+      if (endDate) where.createdAt.lte = new Date(endDate);
     }
 
     const callWhere: any = {};
@@ -566,10 +573,12 @@ export class AnalyticsService {
       if (endDate) callWhere.createdAt.lte = new Date(endDate);
     }
 
-    // groupBy вынесен отдельно из-за ограничений типизации Prisma
+    const completedStatusId = await this.getStatusId(OrderStatus.COMPLETED);
+    const cancelledStatusId = await this.getStatusId(OrderStatus.CANCELLED);
+
     const [orderStats, callStats] = await Promise.all([
       this.prisma.order.groupBy({
-        by: ['statusOrder'],
+        by: ['statusId'],
         where,
         _count: { id: true },
       }),
@@ -598,12 +607,12 @@ export class AnalyticsService {
       this.prisma.order.findMany({
         where: {
           ...where,
-          statusOrder: OrderStatus.COMPLETED,
-          closingData: { not: null },
+          ...(completedStatusId ? { statusId: completedStatusId } : {}),
+          closingAt: { not: null },
         },
         select: {
-          createDate: true,
-          closingData: true,
+          createdAt: true,
+          closingAt: true,
         },
         take: this.MAX_LIMIT,
       }),
@@ -613,28 +622,29 @@ export class AnalyticsService {
           masterId: { not: null },
         },
         select: {
-          createDate: true,
+          createdAt: true,
           dateMeeting: true,
         },
         take: this.MAX_LIMIT,
       }),
     ]);
 
-    // Вычисляем метрики
     const totalOrders = orderStats.reduce((sum, s) => sum + s._count.id, 0);
-    const completedOrders = orderStats.find(o => o.statusOrder === OrderStatus.COMPLETED)?._count.id || 0;
-    const cancelledOrders = orderStats.find(o => o.statusOrder === OrderStatus.CANCELLED)?._count.id || 0;
+    const completedOrders = completedStatusId
+      ? orderStats.filter(o => o.statusId === completedStatusId).reduce((sum, o) => sum + o._count.id, 0)
+      : 0;
+    const cancelledOrders = cancelledStatusId
+      ? orderStats.filter(o => o.statusId === cancelledStatusId).reduce((sum, o) => sum + o._count.id, 0)
+      : 0;
 
     const totalCalls = callStats.reduce((sum, s) => sum + s._count.id, 0);
     const answeredCalls = callStats.find(c => c.status === CallStatus.ANSWERED)?._count.id || 0;
     const missedCalls = callStats.find(c => c.status === CallStatus.MISSED)?._count.id || 0;
 
-    // Среднее время закрытия заказа (в часах)
     const completionTimes = avgTimeToComplete
       .map((o) => {
-        if (o.closingData && o.createDate) {
-          const closingDate = new Date(o.closingData);
-          return (closingDate.getTime() - o.createDate.getTime()) / (1000 * 60 * 60);
+        if (o.closingAt && o.createdAt) {
+          return (new Date(o.closingAt).getTime() - new Date(o.createdAt).getTime()) / (1000 * 60 * 60);
         }
         return null;
       })
@@ -645,12 +655,10 @@ export class AnalyticsService {
         ? completionTimes.reduce((a, b) => a + b, 0) / completionTimes.length
         : 0;
 
-    // Среднее время назначения мастера
     const assignTimes = avgTimeToAssignMaster
       .map((o) => {
-        if (o.dateMeeting && o.createDate) {
-          const meetingDate = new Date(o.dateMeeting);
-          return (meetingDate.getTime() - o.createDate.getTime()) / (1000 * 60 * 60);
+        if (o.dateMeeting && o.createdAt) {
+          return (new Date(o.dateMeeting).getTime() - new Date(o.createdAt).getTime()) / (1000 * 60 * 60);
         }
         return null;
       })

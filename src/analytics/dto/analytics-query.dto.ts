@@ -1,4 +1,4 @@
-import { IsOptional, IsInt, IsString, MaxLength, IsIn } from 'class-validator';
+import { IsOptional, IsInt, IsIn } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { DateRangeDto } from '../../common/dto/date-range.dto';
@@ -10,11 +10,11 @@ export class AnalyticsQueryDto extends DateRangeDto {
   @Type(() => Number)
   operatorId?: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'ID города' })
   @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  city?: string;
+  @IsInt()
+  @Type(() => Number)
+  cityId?: number;
 }
 
 export class DashboardQueryDto {

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as ExcelJS from 'exceljs';
 import {
@@ -13,7 +13,6 @@ import {
 } from './dto/reports-query.dto';
 import { RequestUser } from '../common/interfaces/user.interface';
 import { ConfigService } from '@nestjs/config';
-import { NotFoundException, BadRequestException } from '@nestjs/common';
 import {
   OrderStatus,
   CLOSED_STATUSES,
@@ -24,10 +23,17 @@ import {
 @Injectable()
 export class ReportsService {
   private readonly logger = new Logger(ReportsService.name);
-  
-  // Лимиты пагинации из конфигурации
+
   private readonly DEFAULT_LIMIT: number;
   private readonly MAX_LIMIT: number;
+
+  // Cache for status code → ID mapping
+  private statusCodeToId: Map<string, number> = new Map();
+  private statusCacheExpiry = 0;
+
+  // Cache for city ID → name mapping
+  private cityIdToName: Map<number, string> = new Map();
+  private cityCacheExpiry = 0;
 
   constructor(
     private prisma: PrismaService,
@@ -37,57 +43,64 @@ export class ReportsService {
     this.MAX_LIMIT = this.configService.get<number>('REPORTS_MAX_LIMIT', 5000);
   }
 
-  /**
-   * ✅ FIX: Безопасная конвертация BigInt в Number
-   * PostgreSQL агрегатные функции (COUNT, SUM) возвращают BigInt
-   * Number() теряет точность для значений > Number.MAX_SAFE_INTEGER (2^53 - 1)
-   * 
-   * Для финансовых данных важно сохранить точность:
-   * - Если значение в безопасном диапазоне - возвращаем Number
-   * - Если значение слишком большое - логируем warning и возвращаем Number (с потерей точности)
-   * 
-   * @param value - значение из БД (может быть BigInt, number, string, null, undefined)
-   * @param fieldName - имя поля для логирования (опционально)
-   * @returns number
-   */
   private safeBigIntToNumber(value: bigint | number | string | null | undefined, fieldName?: string): number {
-    if (value === null || value === undefined) {
-      return 0;
-    }
-    
-    // Если уже number - возвращаем как есть
-    if (typeof value === 'number') {
-      return value;
-    }
-    
-    // Если string - парсим
+    if (value === null || value === undefined) return 0;
+    if (typeof value === 'number') return value;
     if (typeof value === 'string') {
       const parsed = parseFloat(value);
       return isNaN(parsed) ? 0 : parsed;
     }
-    
-    // Если BigInt - проверяем диапазон
     if (typeof value === 'bigint') {
-      // Number.MAX_SAFE_INTEGER = 9007199254740991 (2^53 - 1)
       if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
-        this.logger.warn(
-          `⚠️ BigInt precision loss${fieldName ? ` for ${fieldName}` : ''}: ${value.toString()} exceeds safe integer range`
-        );
+        this.logger.warn(`⚠️ BigInt precision loss${fieldName ? ` for ${fieldName}` : ''}: ${value.toString()}`);
       }
       return Number(value);
     }
-    
-    // Fallback для других типов
     return Number(value) || 0;
   }
 
-  /**
-   * Отчёт по заказам с пагинацией
-   */
-  async getOrdersReport(query: OrdersReportQueryDto) {
-    const { startDate, endDate, city, status, masterId, limit = this.DEFAULT_LIMIT, offset = 0 } = query;
+  private async getStatusId(code: string): Promise<number | undefined> {
+    const now = Date.now();
+    if (this.statusCacheExpiry < now || this.statusCodeToId.size === 0) {
+      try {
+        const statuses = await this.prisma.$queryRaw<{ id: number; code: string }[]>`
+          SELECT id, code FROM references_service.order_statuses
+        `;
+        this.statusCodeToId = new Map(statuses.map(s => [s.code, s.id]));
+        this.statusCacheExpiry = now + 5 * 60 * 1000;
+      } catch (err) {
+        this.logger.error('Failed to load status IDs', err);
+      }
+    }
+    return this.statusCodeToId.get(code);
+  }
 
-    // Прогрев соединения перед тяжелыми запросами
+  private async getStatusIds(codes: string[]): Promise<number[]> {
+    const ids: number[] = [];
+    for (const code of codes) {
+      const id = await this.getStatusId(code);
+      if (id !== undefined) ids.push(id);
+    }
+    return ids;
+  }
+
+  private async getCityName(cityId: number): Promise<string> {
+    const now = Date.now();
+    if (this.cityCacheExpiry < now || this.cityIdToName.size === 0) {
+      try {
+        const cities = await this.prisma.city.findMany({ select: { id: true, name: true } });
+        this.cityIdToName = new Map(cities.map(c => [c.id, c.name]));
+        this.cityCacheExpiry = now + 10 * 60 * 1000;
+      } catch (err) {
+        this.logger.error('Failed to load city names', err);
+      }
+    }
+    return this.cityIdToName.get(cityId) || String(cityId);
+  }
+
+  async getOrdersReport(query: OrdersReportQueryDto) {
+    const { startDate, endDate, cityId, status, masterId, limit = this.DEFAULT_LIMIT, offset = 0 } = query;
+
     await this.prisma.executeWithRetry(async () => {
       await this.prisma.$queryRaw`SELECT 1`;
     });
@@ -95,25 +108,33 @@ export class ReportsService {
     const where: any = {};
 
     if (startDate || endDate) {
-      where.createDate = {};
-      if (startDate) where.createDate.gte = new Date(startDate);
-      if (endDate) where.createDate.lte = new Date(endDate);
+      where.createdAt = {};
+      if (startDate) where.createdAt.gte = new Date(startDate);
+      if (endDate) where.createdAt.lte = new Date(endDate);
     }
 
-    if (city) where.city = city;
-    if (status) where.statusOrder = status;
+    if (cityId) where.cityId = cityId;
+
+    if (status) {
+      const statusId = await this.getStatusId(status);
+      if (statusId) where.statusId = statusId;
+    }
+
     if (masterId) where.masterId = masterId;
 
-    // Используем транзакцию для согласованности данных
+    const completedStatusId = await this.getStatusId(OrderStatus.COMPLETED);
+
     const [orders, totalCount, completedCount, totalRevenue] = await this.prisma.$transaction([
       this.prisma.order.findMany({
         where,
-        orderBy: { createDate: 'desc' },
+        orderBy: { createdAt: 'desc' },
         take: Math.min(limit, this.MAX_LIMIT),
         skip: offset,
       }),
       this.prisma.order.count({ where }),
-      this.prisma.order.count({ where: { ...where, statusOrder: OrderStatus.COMPLETED } }),
+      this.prisma.order.count({
+        where: { ...where, ...(completedStatusId ? { statusId: completedStatusId } : {}) },
+      }),
       this.prisma.order.aggregate({
         where: { ...where, result: { not: null } },
         _sum: { result: true },
@@ -142,39 +163,30 @@ export class ReportsService {
     };
   }
 
-  /**
-   * ✅ ОПТИМИЗИРОВАНО: Отчет по мастерам
-   * БЫЛО: 1 + 4*M*C запросов (где M - мастера, C - города)
-   * СТАЛО: 2 запроса
-   */
   async getMastersReport(query: MastersReportQueryDto, user?: RequestUser) {
     const startTime = Date.now();
     const { startDate, endDate, masterId } = query;
 
-    // Прогрев соединения
     await this.prisma.executeWithRetry(async () => {
       await this.prisma.$queryRaw`SELECT 1`;
     });
 
     const orderWhere: any = {};
     if (startDate || endDate) {
-      orderWhere.closingData = {};
-      if (startDate) orderWhere.closingData.gte = new Date(startDate);
+      orderWhere.closingAt = {};
+      if (startDate) orderWhere.closingAt.gte = new Date(startDate);
       if (endDate) {
         const end = new Date(endDate);
         end.setHours(23, 59, 59, 999);
-        orderWhere.closingData.lte = end;
+        orderWhere.closingAt.lte = end;
       }
     }
     if (masterId) orderWhere.masterId = masterId;
 
-    // 1. Получаем мастеров (1 запрос)
     let masters;
-    if (user?.role === 'director' && user?.cities) {
+    if (user?.role === 'director' && user?.cityIds?.length) {
       masters = await this.prisma.master.findMany({
-        where: {
-          cities: { hasSome: user.cities }
-        }
+        where: { cityIds: { hasSome: user.cityIds } },
       });
     } else {
       masters = await this.prisma.master.findMany({
@@ -182,9 +194,11 @@ export class ReportsService {
       });
     }
 
-    // 2. Группированная статистика по мастерам и городам (1 запрос вместо M*C*4)
+    const closedStatusIds = await this.getStatusIds(CLOSED_STATUSES);
+    const completedStatusId = await this.getStatusId(OrderStatus.COMPLETED);
+
     const masterOrderStats = await this.prisma.order.groupBy({
-      by: ['masterId', 'city', 'statusOrder'],
+      by: ['masterId', 'cityId', 'statusId'],
       where: {
         ...orderWhere,
         masterId: { not: null },
@@ -194,43 +208,43 @@ export class ReportsService {
       _sum: { clean: true, masterChange: true },
     });
 
-    // 3. Собираем данные в памяти
-    const masterStats = [];
-    
+    const allCityIds = [...new Set(masters.flatMap(m => m.cityIds))];
+    const cityRecords = allCityIds.length > 0
+      ? await this.prisma.city.findMany({ where: { id: { in: allCityIds } }, select: { id: true, name: true } })
+      : [];
+    const cityNameMap = new Map(cityRecords.map(c => [c.id, c.name]));
+
+    const masterStats: any[] = [];
+
     for (const master of masters) {
-      for (const city of master.cities) {
-        // Проверяем права директора
-        if (user?.role === 'director' && user?.cities && !user.cities.includes(city)) {
+      for (const cityId of master.cityIds) {
+        if (user?.role === 'director' && user?.cityIds && !user.cityIds.includes(cityId)) {
           continue;
         }
-        
-        // Фильтруем статистику для конкретного мастера и города
+
         const stats = masterOrderStats.filter(
-          s => s.masterId === master.id && s.city === city
+          s => s.masterId === master.id && s.cityId === cityId
         );
 
-        // Всего заказов (Готово + Отказ)
-        const totalOrders = stats
-          .filter(s => CLOSED_STATUSES.includes(s.statusOrder as any))
-          .reduce((sum, s) => sum + s._count.id, 0);
+        const totalOrders = closedStatusIds.length > 0
+          ? stats.filter(s => closedStatusIds.includes(s.statusId)).reduce((sum, s) => sum + s._count.id, 0)
+          : stats.reduce((sum, s) => sum + s._count.id, 0);
 
-        // Сумма чистыми (только Готово)
-        const turnover = stats
-          .filter(s => s.statusOrder === OrderStatus.COMPLETED)
-          .reduce((sum, s) => sum + Number(s._sum.clean || 0), 0);
+        const turnover = completedStatusId
+          ? stats.filter(s => s.statusId === completedStatusId).reduce((sum, s) => sum + Number(s._sum.clean || 0), 0)
+          : 0;
 
-        // Сумма сдача мастера (только Готово)
-        const salary = stats
-          .filter(s => s.statusOrder === OrderStatus.COMPLETED)
-          .reduce((sum, s) => sum + Number(s._sum.masterChange || 0), 0);
+        const salary = completedStatusId
+          ? stats.filter(s => s.statusId === completedStatusId).reduce((sum, s) => sum + Number(s._sum.masterChange || 0), 0)
+          : 0;
 
-        // Средний чек
         const avgCheck = totalOrders > 0 ? turnover / totalOrders : 0;
 
         masterStats.push({
           masterId: master.id,
           masterName: master.name,
-          city,
+          cityId,
+          cityName: cityNameMap.get(cityId) || String(cityId),
           totalOrders,
           turnover,
           avgCheck,
@@ -240,18 +254,12 @@ export class ReportsService {
     }
 
     const duration = Date.now() - startTime;
-    const totalCombinations = masters.reduce((sum, m) => sum + m.cities.length, 0);
+    const totalCombinations = masters.reduce((sum, m) => sum + m.cityIds.length, 0);
     this.logger.log(`✅ getMastersReport completed in ${duration}ms (${masters.length} masters, ${totalCombinations} combinations, 2 queries)`);
 
-    return {
-      success: true,
-      data: masterStats,
-    };
+    return { success: true, data: masterStats };
   }
 
-  /**
-   * Финансовый отчёт с пагинацией
-   */
   async getFinanceReport(query: FinanceReportQueryDto) {
     const { startDate, endDate, limit = this.DEFAULT_LIMIT, offset = 0 } = query;
 
@@ -262,7 +270,6 @@ export class ReportsService {
       if (endDate) where.createdAt.lte = new Date(endDate);
     }
 
-    // Транзакция для согласованности
     const [cashTransactions, totalCount, totalSum] = await this.prisma.$transaction([
       this.prisma.cash.findMany({
         where,
@@ -271,24 +278,20 @@ export class ReportsService {
         skip: offset,
       }),
       this.prisma.cash.count({ where }),
-      this.prisma.cash.aggregate({
-        where,
-        _sum: { amount: true },
-      }),
+      this.prisma.cash.aggregate({ where, _sum: { amount: true } }),
     ]);
 
-    // Группировка по name
-    const byName = {
+    const byType = {
       [CashOperationType.INCOME]: 0,
       [CashOperationType.EXPENSE]: 0,
     };
 
     cashTransactions.forEach(t => {
       const amount = Number(t.amount);
-      if (t.name === CashOperationType.INCOME) {
-        byName[CashOperationType.INCOME] += amount;
-      } else if (t.name === CashOperationType.EXPENSE) {
-        byName[CashOperationType.EXPENSE] += amount;
+      if (t.type === CashOperationType.INCOME) {
+        byType[CashOperationType.INCOME] += amount;
+      } else if (t.type === CashOperationType.EXPENSE) {
+        byType[CashOperationType.EXPENSE] += amount;
       }
     });
 
@@ -296,11 +299,8 @@ export class ReportsService {
       success: true,
       data: {
         total: totalSum._sum.amount ? Number(totalSum._sum.amount) : 0,
-        byName,
-        transactions: cashTransactions.map(t => ({
-          ...t,
-          amount: Number(t.amount),
-        })),
+        byType,
+        transactions: cashTransactions.map(t => ({ ...t, amount: Number(t.amount) })),
         pagination: {
           limit: Math.min(limit, this.MAX_LIMIT),
           offset,
@@ -311,131 +311,114 @@ export class ReportsService {
     };
   }
 
-  /**
-   * Отчёт по кассе с группировкой по городам и назначениям платежа
-   * ✅ Исправлено: параметризованные SQL запросы
-   */
   async getCashByPurpose(query: CashByPurposeQueryDto, user?: RequestUser) {
     const startTime = Date.now();
-    const { startDate, endDate, city, purposes } = query;
+    const { startDate, endDate, cityId, purposes } = query;
 
-    // Формируем параметры для параметризованного запроса
     const params: any[] = [];
     let paramIndex = 1;
-    
-    // Базовые условия
+
     let dateCondition = '';
     let cityCondition = '';
 
     if (startDate) {
-      dateCondition += ` AND date_create >= $${paramIndex}`;
+      dateCondition += ` AND created_at >= $${paramIndex}`;
       params.push(new Date(startDate));
       paramIndex++;
     }
-    
+
     if (endDate) {
       const end = new Date(endDate);
       end.setHours(23, 59, 59, 999);
-      dateCondition += ` AND date_create <= $${paramIndex}`;
+      dateCondition += ` AND created_at <= $${paramIndex}`;
       params.push(end);
       paramIndex++;
     }
-    
-    // Фильтр по городу
-    if (city) {
-      // Проверка прав директора
-      if (user?.role === 'director' && user?.cities && !user.cities.includes(city)) {
+
+    if (cityId) {
+      if (user?.role === 'director' && user?.cityIds && !user.cityIds.includes(cityId)) {
         return { success: true, data: { cities: [], totals: { income: 0, expense: 0, balance: 0 } } };
       }
-      cityCondition = ` AND city = $${paramIndex}`;
-      params.push(city);
+      cityCondition = ` AND city_id = $${paramIndex}`;
+      params.push(cityId);
       paramIndex++;
-    } else if (user?.role === 'director' && user?.cities?.length) {
-      cityCondition = ` AND city = ANY($${paramIndex}::text[])`;
-      params.push(user.cities);
+    } else if (user?.role === 'director' && user?.cityIds?.length) {
+      cityCondition = ` AND city_id = ANY($${paramIndex}::int[])`;
+      params.push(user.cityIds);
       paramIndex++;
     }
-    
-    // Фильтр по назначениям платежа
-    const purposeFilter = purposes 
+
+    const purposeFilter = purposes
       ? (Array.isArray(purposes) ? purposes : purposes.split(','))
       : null;
 
-    // ✅ ИСПРАВЛЕНО: Параметризованный SQL запрос
     const cashStats = await this.prisma.$queryRawUnsafe<Array<{
-      city: string | null;
+      city_id: number;
       payment_purpose: string | null;
-      name: string;
+      type: string;
       total_amount: any;
       count: bigint;
     }>>(
       `SELECT 
-        city,
+        city_id,
         payment_purpose,
-        name,
+        type,
         COALESCE(SUM(amount), 0) as total_amount,
         COUNT(*) as count
-      FROM cash
+      FROM cash_service.cash
       WHERE 1=1 ${dateCondition} ${cityCondition}
-      GROUP BY city, payment_purpose, name`,
+      GROUP BY city_id, payment_purpose, type`,
       ...params
     );
-    
+
     this.logger.debug(`[getCashByPurpose] Raw SQL returned ${cashStats.length} rows`);
 
-    /**
-     * Нормализация назначения платежа
-     */
     const normalizePurpose = (rawPurpose: string | null): string => {
       if (!rawPurpose) return 'Без назначения';
-      if (rawPurpose.toLowerCase().startsWith('заказ')) {
-        return 'Заказ';
-      }
+      if (rawPurpose.toLowerCase().startsWith('заказ')) return 'Заказ';
       return rawPurpose;
     };
 
-    // Собираем данные по городам
-    const citiesMap = new Map<string, Map<string, { income: number; expense: number }>>();
+    // Collect all city IDs, then fetch names
+    const cityIds = [...new Set(cashStats.map(s => s.city_id))];
+    const cityRecords = cityIds.length > 0
+      ? await this.prisma.city.findMany({ where: { id: { in: cityIds } }, select: { id: true, name: true } })
+      : [];
+    const cityNameMap = new Map(cityRecords.map(c => [c.id, c.name]));
+
+    const citiesMap = new Map<number, Map<string, { income: number; expense: number }>>();
     let grandTotalIncome = 0;
     let grandTotalExpense = 0;
 
     cashStats.forEach(stat => {
-      const cityName = stat.city || 'Не указан';
+      const cId = stat.city_id;
       const purpose = normalizePurpose(stat.payment_purpose);
       const amount = Number(stat.total_amount) || 0;
 
-      // Фильтр по нормализованным назначениям
-      if (purposeFilter?.length && !purposeFilter.includes(purpose)) {
-        return;
-      }
+      if (purposeFilter?.length && !purposeFilter.includes(purpose)) return;
 
-      if (!citiesMap.has(cityName)) {
-        citiesMap.set(cityName, new Map());
-      }
+      if (!citiesMap.has(cId)) citiesMap.set(cId, new Map());
 
-      const purposeMap = citiesMap.get(cityName)!;
-      if (!purposeMap.has(purpose)) {
-        purposeMap.set(purpose, { income: 0, expense: 0 });
-      }
+      const purposeMap = citiesMap.get(cId)!;
+      if (!purposeMap.has(purpose)) purposeMap.set(purpose, { income: 0, expense: 0 });
 
       const purposeData = purposeMap.get(purpose)!;
-      if (stat.name === CashOperationType.INCOME) {
+      if (stat.type === CashOperationType.INCOME) {
         purposeData.income += amount;
         grandTotalIncome += amount;
-      } else if (stat.name === CashOperationType.EXPENSE) {
+      } else if (stat.type === CashOperationType.EXPENSE) {
         purposeData.expense += amount;
         grandTotalExpense += amount;
       }
     });
 
-    // Формируем результат
-    const cities = Array.from(citiesMap.entries()).map(([cityName, purposeMap]) => {
-      const purposes: any[] = [];
+    const cities = Array.from(citiesMap.entries()).map(([cId, purposeMap]) => {
+      const purposeList: any[] = [];
       let cityIncome = 0;
       let cityExpense = 0;
 
       purposeMap.forEach((data, purpose) => {
-        purposes.push({
+        purposeList.push({
           purpose,
           income: data.income,
           expense: data.expense,
@@ -445,11 +428,12 @@ export class ReportsService {
         cityExpense += data.expense;
       });
 
-      purposes.sort((a, b) => (b.income + b.expense) - (a.income + a.expense));
+      purposeList.sort((a, b) => (b.income + b.expense) - (a.income + a.expense));
 
       return {
-        city: cityName,
-        purposes,
+        cityId: cId,
+        cityName: cityNameMap.get(cId) || String(cId),
+        purposes: purposeList,
         totalIncome: cityIncome,
         totalExpense: cityExpense,
         balance: cityIncome - cityExpense,
@@ -474,9 +458,6 @@ export class ReportsService {
     };
   }
 
-  /**
-   * Отчёт по звонкам
-   */
   async getCallsReport(query: CallsReportQueryDto) {
     const { startDate, endDate, operatorId } = query;
 
@@ -488,7 +469,6 @@ export class ReportsService {
     }
     if (operatorId) where.operatorId = operatorId;
 
-    // Транзакция для согласованности
     const [totalCalls, answeredCalls, missedCalls, avgDuration] = await this.prisma.$transaction([
       this.prisma.call.count({ where }),
       this.prisma.call.count({ where: { ...where, status: CallStatus.ANSWERED } }),
@@ -511,9 +491,6 @@ export class ReportsService {
     };
   }
 
-  /**
-   * Экспорт в Excel
-   */
   async exportToExcel(query: ExportQueryDto) {
     const { type = 'orders' } = query;
 
@@ -522,15 +499,15 @@ export class ReportsService {
 
     if (type === 'orders') {
       const report = await this.getOrdersReport(query);
-      
+
       worksheet.columns = [
-        { header: 'RK', key: 'rk', width: 15 },
+        { header: 'RK ID', key: 'rkId', width: 10 },
         { header: 'Клиент', key: 'clientName', width: 25 },
         { header: 'Телефон', key: 'phone', width: 15 },
-        { header: 'Город', key: 'city', width: 15 },
-        { header: 'Статус', key: 'statusOrder', width: 15 },
+        { header: 'Город ID', key: 'cityId', width: 10 },
+        { header: 'Статус ID', key: 'statusId', width: 10 },
         { header: 'Сумма', key: 'result', width: 10 },
-        { header: 'Дата', key: 'createDate', width: 20 },
+        { header: 'Дата создания', key: 'createdAt', width: 20 },
       ];
 
       report.data.orders.forEach(order => {
@@ -542,103 +519,99 @@ export class ReportsService {
     return buffer;
   }
 
-  /**
-   * ✅ ОПТИМИЗИРОВАНО: Отчет по городам
-   * ✅ ИСПРАВЛЕНО: SQL Injection - теперь параметризованные запросы
-   */
   async getCityReport(query: CityReportQueryDto, user?: RequestUser) {
     const startTime = Date.now();
-    this.logger.debug('=== getCityReport START (OPTIMIZED + SECURED) ===');
-    const { startDate, endDate, city } = query;
+    this.logger.debug('=== getCityReport START ===');
+    const { startDate, endDate, cityId } = query;
 
-    // Прогрев соединения
     await this.prisma.executeWithRetry(async () => {
       await this.prisma.$queryRaw`SELECT 1`;
     });
 
-    // Определяем список городов
-    let cityList: string[];
-    
-    if (city) {
-      if (user?.role === 'director' && user?.cities && !user.cities.includes(city)) {
+    const completedStatusId = await this.getStatusId(OrderStatus.COMPLETED);
+    const notOrderStatusId = await this.getStatusId(OrderStatus.NOT_ORDER);
+    const cancelledStatusId = await this.getStatusId(OrderStatus.CANCELLED);
+    const modernStatusId = await this.getStatusId(OrderStatus.MODERN);
+
+    let cityIdList: number[];
+
+    if (cityId) {
+      if (user?.role === 'director' && user?.cityIds && !user.cityIds.includes(cityId)) {
         return { success: true, data: [] };
       }
-      cityList = [city];
-    } else if (user?.role === 'director' && user?.cities) {
-      cityList = user.cities;
+      cityIdList = [cityId];
+    } else if (user?.role === 'director' && user?.cityIds) {
+      cityIdList = user.cityIds;
     } else {
       const cities = await this.prisma.order.findMany({
-        select: { city: true },
-        distinct: ['city'],
+        select: { cityId: true },
+        distinct: ['cityId'],
       });
-      cityList = cities.map(c => c.city).filter(Boolean);
+      cityIdList = cities.map(c => c.cityId).filter(Boolean) as number[];
     }
 
-    if (cityList.length === 0) {
+    if (cityIdList.length === 0) {
       return { success: true, data: [] };
     }
 
-    // ✅ ИСПРАВЛЕНО: Параметризованные запросы вместо конкатенации строк
-    const params: any[] = [cityList];
+    const params: any[] = [cityIdList];
     let paramIndex = 2;
 
-    // Условия для createDate
     let createDateCondition = '';
     let updatedAtCondition = '';
-    let closingDataCondition = '';
-    
+    let closingAtCondition = '';
+
     if (startDate) {
       const startDateValue = new Date(startDate);
-      createDateCondition += ` AND create_date >= $${paramIndex}`;
+      createDateCondition += ` AND created_at >= $${paramIndex}`;
       updatedAtCondition += ` AND updated_at >= $${paramIndex}`;
-      closingDataCondition += ` AND closing_data >= $${paramIndex}`;
+      closingAtCondition += ` AND closing_at >= $${paramIndex}`;
       params.push(startDateValue);
       paramIndex++;
     }
-    
+
     if (endDate) {
       const endOfDay = new Date(endDate);
       endOfDay.setHours(23, 59, 59, 999);
-      createDateCondition += ` AND create_date <= $${paramIndex}`;
+      createDateCondition += ` AND created_at <= $${paramIndex}`;
       updatedAtCondition += ` AND updated_at <= $${paramIndex}`;
-      closingDataCondition += ` AND closing_data <= $${paramIndex}`;
+      closingAtCondition += ` AND closing_at <= $${paramIndex}`;
       params.push(endOfDay);
       paramIndex++;
     }
 
-    // 1. Создано - заказы по createDate
+    // 1. Total orders by createdAt
     const totalOrdersStats = await this.prisma.$queryRawUnsafe<Array<{
-      city: string;
+      city_id: number;
       total_orders: bigint;
     }>>(
-      `SELECT city, COUNT(*) as total_orders
-       FROM orders
-       WHERE city = ANY($1::text[]) ${createDateCondition}
-       GROUP BY city`,
+      `SELECT city_id, COUNT(*) as total_orders
+       FROM orders_service.orders
+       WHERE city_id = ANY($1::int[]) ${createDateCondition}
+       GROUP BY city_id`,
       ...params
     );
 
-    // 2. Незаказы и Отказы - по updatedAt
+    // 2. Not-orders and cancellations by updatedAt
     const statusByUpdatedAt = await this.prisma.$queryRawUnsafe<Array<{
-      city: string;
-      status_order: string;
+      city_id: number;
+      status_id: number;
       count: bigint;
     }>>(
-      `SELECT city, status_order, COUNT(*) as count
-       FROM orders
-       WHERE city = ANY($1::text[])
-         AND status_order IN ($${paramIndex}, $${paramIndex + 1})
+      `SELECT city_id, status_id, COUNT(*) as count
+       FROM orders_service.orders
+       WHERE city_id = ANY($1::int[])
+         AND status_id IN (${notOrderStatusId ?? 0}, ${cancelledStatusId ?? 0})
          ${updatedAtCondition}
-       GROUP BY city, status_order`,
-      ...params, OrderStatus.NOT_ORDER, OrderStatus.CANCELLED
+       GROUP BY city_id, status_id`,
+      ...params
     );
 
-    // Обновляем params для следующего запроса
     const paramsForCompleted = [...params];
 
-    // 3. В деньги и категории чеков - по closingData
+    // 3. Completed orders stats by closingAt
     const completedOrdersStats = await this.prisma.$queryRawUnsafe<Array<{
-      city: string;
+      city_id: number;
       completed_orders: bigint;
       micro_under_1500: bigint;
       micro_1500_10000: bigint;
@@ -648,62 +621,66 @@ export class ReportsService {
       profit: number;
     }>>(
       `SELECT 
-        city,
-        COUNT(*) FILTER (WHERE status_order = $${paramIndex} AND result > 0) as completed_orders,
-        COUNT(*) FILTER (WHERE status_order = $${paramIndex} AND result > 0 AND clean > 0 AND clean < 1500) as micro_under_1500,
-        COUNT(*) FILTER (WHERE status_order = $${paramIndex} AND result > 0 AND clean >= 1500 AND clean < 10000) as micro_1500_10000,
-        COUNT(*) FILTER (WHERE status_order = $${paramIndex} AND result > 0 AND clean >= 10000) as over10k_count,
-        COALESCE(MAX(clean) FILTER (WHERE status_order = $${paramIndex}), 0) as max_check,
-        COALESCE(SUM(clean) FILTER (WHERE status_order = $${paramIndex}), 0) as turnover,
-        COALESCE(SUM(master_change) FILTER (WHERE status_order = $${paramIndex}), 0) as profit
-      FROM orders
-      WHERE city = ANY($1::text[]) ${closingDataCondition}
-      GROUP BY city`,
-      ...paramsForCompleted, OrderStatus.COMPLETED
+        city_id,
+        COUNT(*) FILTER (WHERE status_id = ${completedStatusId ?? 0} AND result > 0) as completed_orders,
+        COUNT(*) FILTER (WHERE status_id = ${completedStatusId ?? 0} AND result > 0 AND clean > 0 AND clean < 1500) as micro_under_1500,
+        COUNT(*) FILTER (WHERE status_id = ${completedStatusId ?? 0} AND result > 0 AND clean >= 1500 AND clean < 10000) as micro_1500_10000,
+        COUNT(*) FILTER (WHERE status_id = ${completedStatusId ?? 0} AND result > 0 AND clean >= 10000) as over10k_count,
+        COALESCE(MAX(clean) FILTER (WHERE status_id = ${completedStatusId ?? 0}), 0) as max_check,
+        COALESCE(SUM(clean) FILTER (WHERE status_id = ${completedStatusId ?? 0}), 0) as turnover,
+        COALESCE(SUM(master_change) FILTER (WHERE status_id = ${completedStatusId ?? 0}), 0) as profit
+      FROM orders_service.orders
+      WHERE city_id = ANY($1::int[]) ${closingAtCondition}
+      GROUP BY city_id`,
+      ...paramsForCompleted
     );
 
-    // 4. Статистика "Модерн" (без фильтра по датам)
+    // 4. Modern orders
     const modernStats = await this.prisma.$queryRawUnsafe<Array<{
-      city: string;
+      city_id: number;
       modern_count: bigint;
     }>>(
-      `SELECT city, COUNT(*) as modern_count
-       FROM orders
-       WHERE city = ANY($1::text[]) AND status_order = $2
-       GROUP BY city`,
-      cityList, OrderStatus.MODERN
+      `SELECT city_id, COUNT(*) as modern_count
+       FROM orders_service.orders
+       WHERE city_id = ANY($1::int[]) AND status_id = ${modernStatusId ?? 0}
+       GROUP BY city_id`,
+      cityIdList
     );
 
-    // 5. Кассовая статистика
+    // 5. Cash stats
     const cashStats = await this.prisma.$queryRawUnsafe<Array<{
-      city: string;
-      name: string;
+      city_id: number;
+      type: string;
       total_amount: number;
     }>>(
-      `SELECT city, name, COALESCE(SUM(amount), 0) as total_amount
-       FROM cash
-       WHERE city = ANY($1::text[])
-       GROUP BY city, name`,
-      cityList
+      `SELECT city_id, type, COALESCE(SUM(amount), 0) as total_amount
+       FROM cash_service.cash
+       WHERE city_id = ANY($1::int[])
+       GROUP BY city_id, type`,
+      cityIdList
     );
 
-    // 6. Собираем данные в памяти
-    const cityStatsResult = cityList.map((cityName) => {
-      const cityTotalOrders = totalOrdersStats.find(s => s.city === cityName);
-      const cityStatusUpdated = statusByUpdatedAt.filter(s => s.city === cityName);
-      const cityCompleted = completedOrdersStats.find(s => s.city === cityName);
-      const cityModern = modernStats.find(m => m.city === cityName);
-      const cityCash = cashStats.filter(c => c.city === cityName);
+    // Fetch city names
+    const cityRecords = await this.prisma.city.findMany({
+      where: { id: { in: cityIdList } },
+      select: { id: true, name: true },
+    });
+    const cityNameMap = new Map(cityRecords.map(c => [c.id, c.name]));
 
-      // ✅ FIX: Используем safeBigIntToNumber для предотвращения потери точности BigInt
+    // 6. Build result
+    const cityStatsResult = cityIdList.map((cId) => {
+      const cityTotalOrders = totalOrdersStats.find(s => s.city_id === cId);
+      const cityStatusUpdated = statusByUpdatedAt.filter(s => s.city_id === cId);
+      const cityCompleted = completedOrdersStats.find(s => s.city_id === cId);
+      const cityModern = modernStats.find(m => m.city_id === cId);
+      const cityCash = cashStats.filter(c => c.city_id === cId);
+
       const totalOrders = this.safeBigIntToNumber(cityTotalOrders?.total_orders, 'total_orders');
       const notOrders = this.safeBigIntToNumber(
-        cityStatusUpdated.find(s => s.status_order === OrderStatus.NOT_ORDER)?.count,
-        'not_orders'
+        cityStatusUpdated.find(s => s.status_id === notOrderStatusId)?.count, 'not_orders'
       );
       const zeroOrders = this.safeBigIntToNumber(
-        cityStatusUpdated.find(s => s.status_order === OrderStatus.CANCELLED)?.count,
-        'zero_orders'
+        cityStatusUpdated.find(s => s.status_id === cancelledStatusId)?.count, 'zero_orders'
       );
 
       const completedOrders = this.safeBigIntToNumber(cityCompleted?.completed_orders, 'completed_orders');
@@ -717,12 +694,10 @@ export class ReportsService {
       const modernOrders = this.safeBigIntToNumber(cityModern?.modern_count, 'modern_count');
 
       const income = this.safeBigIntToNumber(
-        cityCash.find(c => c.name === CashOperationType.INCOME)?.total_amount,
-        'income'
+        cityCash.find(c => c.type === CashOperationType.INCOME)?.total_amount, 'income'
       );
       const expense = this.safeBigIntToNumber(
-        cityCash.find(c => c.name === CashOperationType.EXPENSE)?.total_amount,
-        'expense'
+        cityCash.find(c => c.type === CashOperationType.EXPENSE)?.total_amount, 'expense'
       );
       const totalAmount = income - expense;
 
@@ -731,7 +706,8 @@ export class ReportsService {
       const completedPercent = totalClosed > 0 ? (completedOrders / totalClosed) * 100 : 0;
 
       return {
-        city: cityName,
+        cityId: cId,
+        cityName: cityNameMap.get(cId) || String(cId),
         orders: {
           closedOrders: totalClosed,
           refusals: zeroOrders,
@@ -758,46 +734,31 @@ export class ReportsService {
           maxCheck: maxCheckValue,
           masterHandover: modernOrders,
         },
-        cash: {
-          totalAmount,
-        },
+        cash: { totalAmount },
       };
     });
 
     const duration = Date.now() - startTime;
-    this.logger.log(`✅ getCityReport completed in ${duration}ms (${cityList.length} cities)`);
+    this.logger.log(`✅ getCityReport completed in ${duration}ms (${cityIdList.length} cities)`);
 
-    return {
-      success: true,
-      data: cityStatsResult,
-    };
+    return { success: true, data: cityStatsResult };
   }
 
-  /**
-   * Детальный отчёт по городу с пагинацией
-   */
-  async getCityDetailedReport(city: string, query: CityReportQueryDto) {
+  async getCityDetailedReport(cityId: number, query: CityReportQueryDto) {
     const { startDate, endDate, limit = this.DEFAULT_LIMIT, offset = 0 } = query;
-    
-    const where: any = { city };
-    
-    if (startDate) {
-      where.createDate = { ...where.createDate, gte: new Date(startDate) };
-    }
-    
-    if (endDate) {
-      where.createDate = { ...where.createDate, lte: new Date(endDate) };
-    }
+
+    const where: any = { cityId };
+
+    if (startDate) where.createdAt = { ...where.createdAt, gte: new Date(startDate) };
+    if (endDate) where.createdAt = { ...where.createdAt, lte: new Date(endDate) };
 
     const [orders, totalCount] = await this.prisma.$transaction([
       this.prisma.order.findMany({
         where,
         include: {
-          master: {
-            select: { name: true }
-          }
+          cashSubmission: { select: { status: true, amount: true } },
         },
-        orderBy: { createDate: 'desc' },
+        orderBy: { createdAt: 'desc' },
         take: Math.min(limit, this.MAX_LIMIT),
         skip: offset,
       }),
@@ -816,80 +777,81 @@ export class ReportsService {
     };
   }
 
-  /**
-   * ✅ ОПТИМИЗИРОВАНО: Статистика мастера (исправлен N+1)
-   * БЫЛО: 4*N запросов (где N - количество городов)
-   * СТАЛО: 2 запроса
-   */
   async getMasterStatistics(query: MastersReportQueryDto, user?: RequestUser) {
     const startTime = Date.now();
     const { startDate, endDate } = query;
 
     const masterId = user?.userId;
-    
+
     if (!masterId) {
       throw new BadRequestException('Master ID not found in token');
     }
 
-    // Получаем данные мастера
     const master = await this.prisma.master.findUnique({
       where: { id: masterId },
-      select: { id: true, name: true, cities: true },
+      select: { id: true, name: true, cityIds: true },
     });
 
     if (!master) {
       throw new NotFoundException('Master not found');
     }
 
-    const cities = master.cities || [];
-    if (cities.length === 0) {
+    const cityIds = master.cityIds || [];
+    if (cityIds.length === 0) {
       return { success: true, data: [] };
     }
 
-    // ✅ ИСПРАВЛЕНО: Один запрос с группировкой вместо N*4 запросов
+    const completedStatusId = await this.getStatusId(OrderStatus.COMPLETED);
+    const modernStatusId = await this.getStatusId(OrderStatus.MODERN);
+
     const orderWhere: any = {
       masterId,
-      city: { in: cities },
+      cityId: { in: cityIds },
     };
 
     if (startDate || endDate) {
-      orderWhere.closingData = {};
-      if (startDate) orderWhere.closingData.gte = new Date(startDate);
-      if (endDate) orderWhere.closingData.lte = new Date(endDate);
+      orderWhere.closingAt = {};
+      if (startDate) orderWhere.closingAt.gte = new Date(startDate);
+      if (endDate) orderWhere.closingAt.lte = new Date(endDate);
     }
 
-    // Группированная статистика по городам и статусам
     const cityStats = await this.prisma.order.groupBy({
-      by: ['city', 'statusOrder'],
+      by: ['cityId', 'statusId'],
       where: orderWhere,
       _count: { id: true },
       _sum: { clean: true, masterChange: true },
     });
 
-    // Собираем результат по городам
-    const result = cities.map((city) => {
-      const cityData = cityStats.filter(s => s.city === city);
-      
-      const closedOrders = cityData
-        .filter(s => s.statusOrder === OrderStatus.COMPLETED)
-        .reduce((sum, s) => sum + s._count.id, 0);
-      
-      const modernOrders = cityData
-        .filter(s => s.statusOrder === OrderStatus.MODERN)
-        .reduce((sum, s) => sum + s._count.id, 0);
-      
-      const totalRevenue = cityData
-        .filter(s => s.statusOrder === OrderStatus.COMPLETED)
-        .reduce((sum, s) => sum + Number(s._sum.clean || 0), 0);
-      
-      const salary = cityData
-        .filter(s => s.statusOrder === OrderStatus.COMPLETED)
-        .reduce((sum, s) => sum + Number(s._sum.masterChange || 0), 0);
+    const cityRecords = await this.prisma.city.findMany({
+      where: { id: { in: cityIds } },
+      select: { id: true, name: true },
+    });
+    const cityNameMap = new Map(cityRecords.map(c => [c.id, c.name]));
+
+    const result = cityIds.map((cId) => {
+      const cityData = cityStats.filter(s => s.cityId === cId);
+
+      const closedOrders = completedStatusId
+        ? cityData.filter(s => s.statusId === completedStatusId).reduce((sum, s) => sum + s._count.id, 0)
+        : 0;
+
+      const modernOrders = modernStatusId
+        ? cityData.filter(s => s.statusId === modernStatusId).reduce((sum, s) => sum + s._count.id, 0)
+        : 0;
+
+      const totalRevenue = completedStatusId
+        ? cityData.filter(s => s.statusId === completedStatusId).reduce((sum, s) => sum + Number(s._sum.clean || 0), 0)
+        : 0;
+
+      const salary = completedStatusId
+        ? cityData.filter(s => s.statusId === completedStatusId).reduce((sum, s) => sum + Number(s._sum.masterChange || 0), 0)
+        : 0;
 
       const averageCheck = closedOrders > 0 ? totalRevenue / closedOrders : 0;
 
       return {
-        city,
+        cityId: cId,
+        cityName: cityNameMap.get(cId) || String(cId),
         closedOrders,
         modernOrders,
         totalRevenue,
@@ -899,94 +861,93 @@ export class ReportsService {
     });
 
     const duration = Date.now() - startTime;
-    this.logger.log(`✅ getMasterStatistics completed in ${duration}ms (${cities.length} cities, 2 queries)`);
+    this.logger.log(`✅ getMasterStatistics completed in ${duration}ms (${cityIds.length} cities, 2 queries)`);
 
-    return {
-      success: true,
-      data: result,
-    };
+    return { success: true, data: result };
   }
 
-  /**
-   * ✅ ОПТИМИЗИРОВАНО: Отчет по кампаниям
-   */
   async getCampaignsReport(query: CampaignsReportQueryDto, user?: RequestUser) {
     const startTime = Date.now();
-    this.logger.debug('=== getCampaignsReport START (OPTIMIZED) ===');
-    
-    const { startDate, endDate, city } = query;
+    this.logger.debug('=== getCampaignsReport START ===');
+
+    const { startDate, endDate, cityId } = query;
 
     const orderWhere: any = {};
-    
+
     if (startDate || endDate) {
-      orderWhere.closingData = {};
-      if (startDate) orderWhere.closingData.gte = new Date(startDate);
+      orderWhere.closingAt = {};
+      if (startDate) orderWhere.closingAt.gte = new Date(startDate);
       if (endDate) {
         const end = new Date(endDate);
         end.setHours(23, 59, 59, 999);
-        orderWhere.closingData.lte = end;
+        orderWhere.closingAt.lte = end;
       }
     }
-    
-    if (city) {
-      if (user?.role === 'director' && user?.cities && !user.cities.includes(city)) {
+
+    if (cityId) {
+      if (user?.role === 'director' && user?.cityIds && !user.cityIds.includes(cityId)) {
         return { success: true, data: [] };
       }
-      orderWhere.city = city;
+      orderWhere.cityId = cityId;
+    } else if (user?.role === 'director' && user?.cityIds && !cityId) {
+      orderWhere.cityId = { in: user.cityIds };
     }
 
-    if (user?.role === 'director' && user?.cities && !city) {
-      orderWhere.city = { in: user.cities };
-    }
+    const closedStatusIds = await this.getStatusIds(CLOSED_STATUSES);
 
-    // Один запрос с группировкой
     const campaigns = await this.prisma.order.groupBy({
-      by: ['city', 'rk', 'avitoName'],
+      by: ['cityId', 'rkId', 'statusId'],
       where: {
         ...orderWhere,
-        statusOrder: { in: CLOSED_STATUSES }
+        ...(closedStatusIds.length > 0 ? { statusId: { in: closedStatusIds } } : {}),
       },
       _count: { id: true },
-      _sum: {
-        clean: true,
-        masterChange: true
-      }
+      _sum: { clean: true, masterChange: true },
     });
 
-    // Группируем по городам
-    const citiesMap = new Map<string, Array<{
-      rk: string;
-      avitoName: string | null;
+    const allCityIds = [...new Set(campaigns.map(c => c.cityId))];
+    const allRkIds = [...new Set(campaigns.map(c => c.rkId))];
+
+    const [cityRecords, rkRecords] = await Promise.all([
+      allCityIds.length > 0
+        ? this.prisma.city.findMany({ where: { id: { in: allCityIds } }, select: { id: true, name: true } })
+        : Promise.resolve([]),
+      allRkIds.length > 0
+        ? this.prisma.rk.findMany({ where: { id: { in: allRkIds } }, select: { id: true, name: true } })
+        : Promise.resolve([]),
+    ]);
+    const cityNameMap = new Map(cityRecords.map(c => [c.id, c.name]));
+    const rkNameMap = new Map(rkRecords.map(r => [r.id, r.name]));
+
+    // Group by cityId, rkId
+    const citiesMap = new Map<number, Array<{
+      rkId: number;
+      rkName: string;
       ordersCount: number;
       revenue: number;
       profit: number;
     }>>();
 
     campaigns.forEach(campaign => {
-      if (!citiesMap.has(campaign.city)) {
-        citiesMap.set(campaign.city, []);
-      }
-      
-      citiesMap.get(campaign.city)!.push({
-        rk: campaign.rk,
-        avitoName: campaign.avitoName,
+      if (!citiesMap.has(campaign.cityId)) citiesMap.set(campaign.cityId, []);
+      citiesMap.get(campaign.cityId)!.push({
+        rkId: campaign.rkId,
+        rkName: rkNameMap.get(campaign.rkId) || String(campaign.rkId),
         ordersCount: campaign._count.id,
         revenue: Number(campaign._sum.clean || 0),
         profit: Number(campaign._sum.masterChange || 0),
       });
     });
 
-    const cityReports = Array.from(citiesMap.entries()).map(([city, campaigns]) => ({
-      city,
-      campaigns,
+    const cityReports = Array.from(citiesMap.entries()).map(([cId, campaignList]) => ({
+      cityId: cId,
+      cityName: cityNameMap.get(cId) || String(cId),
+      campaigns: campaignList,
     }));
 
     const duration = Date.now() - startTime;
     this.logger.log(`✅ getCampaignsReport completed in ${duration}ms (${cityReports.length} cities, 1 query)`);
 
-    return {
-      success: true,
-      data: cityReports,
-    };
+    return { success: true, data: cityReports };
   }
 }

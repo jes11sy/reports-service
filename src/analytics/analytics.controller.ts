@@ -14,7 +14,7 @@ export class AnalyticsController {
   @Get('operators')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить статистику операторов' })
@@ -29,7 +29,7 @@ export class AnalyticsController {
   @Get('cities')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить аналитику по городам' })
@@ -40,7 +40,7 @@ export class AnalyticsController {
   @Get('campaigns')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить аналитику по рекламным кампаниям (РК)' })
@@ -51,20 +51,20 @@ export class AnalyticsController {
   @Get('daily')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить дневную метрику' })
   async getDailyMetrics(@Query() query: AnalyticsQueryDto) {
-    return this.analyticsService.getDailyMetrics(query.startDate, query.endDate, query.city);
+    return this.analyticsService.getDailyMetrics(query.startDate, query.endDate, query.cityId);
   }
 
   @Get('dashboard')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN, UserRole.CALLCENTRE_OPERATOR)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { limit: 60, ttl: 60000 } }) // Dashboard часто обновляется
+  @Throttle({ default: { limit: 60, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить данные для дашборда' })
   async getDashboardData(@Query() query: DashboardQueryDto) {
     return this.analyticsService.getDashboardData(query.period || 'today');
@@ -75,7 +75,7 @@ export class AnalyticsController {
   @ApiBearerAuth()
   @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { limit: 10, ttl: 60000 } }) // Тяжёлый запрос
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @ApiOperation({ summary: 'Получить метрики производительности' })
   async getPerformanceMetrics(@Query() query: AnalyticsQueryDto) {
     return this.analyticsService.getPerformanceMetrics(query.startDate, query.endDate);

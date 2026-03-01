@@ -36,7 +36,7 @@ export class ReportsController {
   @Get('orders')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: 'Get orders statistics' })
   async getOrdersReport(@Query() query: OrdersReportQueryDto) {
@@ -46,7 +46,7 @@ export class ReportsController {
   @Get('masters')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Get masters report' })
   async getMastersReport(
@@ -69,7 +69,7 @@ export class ReportsController {
   @Get('cash/by-purpose')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Get cash report grouped by city and payment purpose' })
   async getCashByPurpose(
@@ -82,7 +82,7 @@ export class ReportsController {
   @Get('calls')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: 'Get calls statistics' })
   async getCallsReport(@Query() query: CallsReportQueryDto) {
@@ -92,8 +92,8 @@ export class ReportsController {
   @Get('city')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
-  @Throttle({ default: { limit: 10, ttl: 60000 } }) // Тяжёлый запрос - строгий лимит
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @ApiOperation({ summary: 'Get city report' })
   async getCityReport(
     @Query() query: CityReportQueryDto,
@@ -102,23 +102,23 @@ export class ReportsController {
     return this.reportsService.getCityReport(query, req.user);
   }
 
-  @Get('city/:city')
+  @Get('city/:cityId')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Get detailed city report' })
   async getCityDetailedReport(
     @Query() query: CityReportQueryDto,
-    @Param('city') city: string,
+    @Param('cityId') cityId: string,
   ) {
-    return this.reportsService.getCityDetailedReport(city, query);
+    return this.reportsService.getCityDetailedReport(parseInt(cityId, 10), query);
   }
 
   @Get('campaigns')
   @UseGuards(CookieJwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(UserRole.ADMIN, UserRole.DIRECTOR, UserRole.CALLCENTRE_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.DIRECTOR)
   @Throttle({ default: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Get campaigns report by cities' })
   async getCampaignsReport(
