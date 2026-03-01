@@ -208,7 +208,7 @@ export class ReportsService {
       _sum: { clean: true, masterChange: true },
     });
 
-    const allCityIds = [...new Set(masters.flatMap(m => m.cityIds))];
+    const allCityIds = [...new Set(masters.flatMap(m => m.cityIds as number[]))];
     const cityRecords = allCityIds.length > 0
       ? await this.prisma.city.findMany({ where: { id: { in: allCityIds } }, select: { id: true, name: true } })
       : [];
